@@ -1,0 +1,1595 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Shield, Swords, Zap, Wifi, Users, AlertCircle, Copy, ArrowLeft, Keyboard, Pause, MapPin, Hand } from 'lucide-react';
+import {
+  initializeApp,
+  getApps,
+} from 'firebase/app';
+import {
+  getAuth,
+  signInAnonymously,
+  signInWithCustomToken,
+  onAuthStateChanged,
+  User
+} from 'firebase/auth';
+import {
+  getFirestore,
+  collection,
+  doc,
+  setDoc,
+  updateDoc,
+  onSnapshot,
+  runTransaction
+} from 'firebase/firestore';
+
+// ==========================================
+// ENVIRONMENT & FIREBASE CONFIGURATION
+// ==========================================
+const apiKey = "";
+let firebaseApp: any;
+let auth: any;
+let db: any;
+
+const initFirebase = () => {
+  if (typeof window !== 'undefined' && typeof (window as any).__firebase_config !== 'undefined') {
+    try {
+      const firebaseConfig = JSON.parse((window as any).__firebase_config);
+      if (!getApps().length) firebaseApp = initializeApp(firebaseConfig);
+      else firebaseApp = getApps()[0];
+      auth = getAuth(firebaseApp);
+      db = getFirestore(firebaseApp);
+      return true;
+    } catch (e) {
+      console.error("Firebase init failed", e);
+      return false;
+    }
+  }
+  return false;
+};
+
+const getAppId = () => typeof (window as any).__app_id !== 'undefined' ? (window as any).__app_id : 'default-sf7-app';
+const getMatchCollection = () => collection(db, 'artifacts', getAppId(), 'public', 'data', 'sf7_matches');
+
+// ==========================================
+// HIGH-FIDELITY CHARACTER HEADS (PERSONAS)
+// ==========================================
+const SVGS = {
+  bhairav: `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <radialGradient id="fire" cx="50%" cy="100%" r="100%">
+           <stop offset="0%" stop-color="#facc15"/><stop offset="50%" stop-color="#ea580c"/><stop offset="100%" stop-color="#991b1b"/>
+        </radialGradient>
+        <filter id="glow"><feGaussianBlur stdDeviation="2" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <path d="M 40 100 Q 20 20 100 10 Q 180 20 160 100 Z" fill="url(#fire)"/>
+      <path d="M 60 110 Q 30 40 100 20 Q 170 40 140 110 Z" fill="#ea580c"/>
+      <circle cx="70" cy="50" r="10" fill="#e2e8f0"/><circle cx="100" cy="40" r="12" fill="#e2e8f0"/><circle cx="130" cy="50" r="10" fill="#e2e8f0"/>
+      <path d="M 65 50 L 75 50 L 75 60 L 65 60 Z M 95 40 L 105 40 L 105 52 L 95 52 Z M 125 50 L 135 50 L 135 60 L 125 60 Z" fill="#e2e8f0"/>
+      <circle cx="100" cy="110" r="55" fill="#1e293b"/>
+      <ellipse cx="75" cy="100" rx="12" ry="6" fill="#ef4444" transform="rotate(15 75 100)" filter="url(#glow)"/>
+      <ellipse cx="125" cy="100" rx="12" ry="6" fill="#ef4444" transform="rotate(-15 125 100)" filter="url(#glow)"/>
+      <ellipse cx="100" cy="85" rx="6" ry="10" fill="#ef4444" filter="url(#glow)"/>
+      <circle cx="75" cy="100" r="3" fill="#facc15"/>
+      <circle cx="125" cy="100" r="3" fill="#facc15"/>
+      <circle cx="100" cy="85" r="2" fill="#facc15"/>
+      <path d="M 75 135 Q 100 155 125 135" fill="none" stroke="#000" stroke-width="4"/>
+      <polygon points="80,138 85,150 90,139" fill="#fff"/>
+      <polygon points="120,138 115,150 110,139" fill="#fff"/>
+      <polygon points="95,142 100,132 105,142" fill="#fff"/>
+    </svg>`),
+  kumari: `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <circle cx="100" cy="100" r="40" fill="#ffe0b2"/>
+      <path d="M 85 95 Q 100 110 115 95" fill="none" stroke="#000" stroke-width="3"/>
+      <circle cx="100" cy="75" r="8" fill="#d90036"/>
+      <path d="M 70 85 Q 85 75 100 85 Q 115 75 130 85" fill="none" stroke="#000" stroke-width="4"/>
+      <path d="M 60 70 Q 100 40 140 70 L 150 130 Q 100 160 50 130 Z" fill="#ffe600" opacity="0.8"/>
+    </svg>`),
+  ned_kelly: `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <rect x="50" y="40" width="100" height="120" rx="10" fill="#4a5568"/>
+      <rect x="65" y="90" width="70" height="15" fill="#111827"/>
+      <circle cx="100" cy="97" r="4" fill="#ff3333" opacity="0.8"/>
+    </svg>`),
+  serpent: `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <circle cx="100" cy="100" r="60" fill="#001a33"/>
+      <circle cx="100" cy="80" r="20" fill="#00ffff"/>
+      <circle cx="95" cy="75" r="5" fill="#fff"/><circle cx="115" cy="75" r="5" fill="#fff"/>
+      <path d="M 105 85 L 105 100 M 100 85 L 100 95" stroke="#ff0000" stroke-width="4"/>
+    </svg>`)
+};
+
+// ==========================================
+// GAME CONSTANTS, STAGES & CHARACTERS
+// ==========================================
+const FPS = 60;
+const GRAVITY = 0.8;
+const FLOOR_Y = 500;
+const CANVAS_WIDTH = 1000;
+const CANVAS_HEIGHT = 600;
+
+type CharId = 'bhairav' | 'kumari' | 'ned_kelly' | 'serpent';
+type StageId = 'inferno' | 'durbar' | 'outback' | 'opera';
+
+interface Character {
+  id: CharId; name: string; origin: string; color: string; secondaryColor: string;
+  speed: number; jumpPower: number; attackDamage: number; health: number; description: string; svg: string;
+}
+
+interface StageConfig {
+  id: StageId; name: string; location: string; color1: string; color2: string;
+}
+
+const CHARACTERS: Record<CharId, Character> = {
+  bhairav: { id: 'bhairav', name: 'Kala Bhairav', origin: 'Nepal', color: '#1e293b', secondaryColor: '#ea580c', speed: 7.5, jumpPower: -16, attackDamage: 120, health: 1000, description: 'Fierce deity. Hurls flaming fireballs and commands the trishul.', svg: SVGS.bhairav },
+  kumari: { id: 'kumari', name: 'Kumari', origin: 'Nepal', color: '#ffcc00', secondaryColor: '#ff0055', speed: 6, jumpPower: -14, attackDamage: 150, health: 900, description: 'Living goddess. Floats gracefully, devastating orbital laser beams.', svg: SVGS.kumari },
+  ned_kelly: { id: 'ned_kelly', name: 'Ned Kelly', origin: 'Australia', color: '#8899a6', secondaryColor: '#ff3333', speed: 4.5, jumpPower: -12, attackDamage: 200, health: 1200, description: 'The iron outlaw. Heavy cylinder armor, wields a devastating shotgun.', svg: SVGS.ned_kelly },
+  serpent: { id: 'serpent', name: 'Rainbow Serpent', origin: 'Australia', color: '#00e5ff', secondaryColor: '#b000ff', speed: 8.5, jumpPower: -18, attackDamage: 90, health: 950, description: 'Creator spirit. Slithering snake body, summons massive tidal waves.', svg: SVGS.serpent }
+};
+
+const STAGES: Record<StageId, StageConfig> = {
+  inferno: { id: 'inferno', name: "Bhairav's Inferno", location: 'Nepal Underworld', color1: '#7f1d1d', color2: '#2d0a0a' },
+  durbar: { id: 'durbar', name: "Golden Durbar", location: 'Kathmandu, Nepal', color1: '#f59e0b', color2: '#431407' },
+  outback: { id: 'outback', name: "Crimson Outback", location: 'Uluru, Australia', color1: '#ea580c', color2: '#1e1b4b' },
+  opera: { id: 'opera', name: "Midnight Harbour", location: 'Sydney, Australia', color1: '#1e3a8a', color2: '#020617' }
+};
+
+// ==========================================
+// GAME ENGINE TYPES
+// ==========================================
+interface PlayerState {
+  x: number; y: number; vx: number; vy: number;
+  hp: number; maxHp: number; dir: number;
+  action: 'idle' | 'walk' | 'jump' | 'attack' | 'kick' | 'block' | 'hit' | 'dead' | 'special1' | 'special2' | 'special3' | 'punchCombo' | 'kickCombo' | 'crouch' | 'crouchBlock' | 'uppercut' | 'slam';
+  actionFrame: number; charId: CharId; displayHp: number; 
+}
+
+interface Projectile {
+  id: number; ownerId: string; charId: CharId; type: 'fireball' | 'lightning' | 'bullet' | 'venom' | 'wave' | 'darkSkull' | 'darkSpike';
+  x: number; y: number; vx: number; vy: number; active: boolean; width: number; height: number;
+  hitsLeft: number; damageMult?: number;
+}
+
+interface InputEvent { action: string; time: number; }
+
+// ==========================================
+// WEB AUDIO API SYNTHESIZER
+// ==========================================
+class SoundEngine {
+  ctx: AudioContext | null = null; noiseBuf: AudioBuffer | null = null;
+
+  init() {
+    if (!this.ctx) {
+        this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const bufSize = this.ctx.sampleRate * 2;
+        this.noiseBuf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+        const output = this.noiseBuf.getChannelData(0);
+        for (let i = 0; i < bufSize; i++) output[i] = Math.random() * 2 - 1;
+    }
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+  }
+
+  playImpact(baseFreq: number, subFreq: number, noiseFilter: BiquadFilterType, noiseFreq: number, dur: number) {
+    if (!this.ctx || !this.noiseBuf) return; const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator(); const oscGain = this.ctx.createGain();
+    osc.type = 'sine'; osc.frequency.setValueAtTime(baseFreq, t); osc.frequency.exponentialRampToValueAtTime(subFreq, t + dur * 0.5);
+    oscGain.gain.setValueAtTime(1, t); oscGain.gain.exponentialRampToValueAtTime(0.01, t + dur);
+    osc.connect(oscGain); oscGain.connect(this.ctx.destination); osc.start(); osc.stop(t + dur);
+
+    const noise = this.ctx.createBufferSource(); const filter = this.ctx.createBiquadFilter(); const noiseGain = this.ctx.createGain();
+    noise.buffer = this.noiseBuf; filter.type = noiseFilter; filter.frequency.setValueAtTime(noiseFreq, t);
+    noiseGain.gain.setValueAtTime(0.8, t); noiseGain.gain.exponentialRampToValueAtTime(0.01, t + (dur * 0.3));
+    noise.connect(filter); filter.connect(noiseGain); noiseGain.connect(this.ctx.destination); noise.start(); noise.stop(t + dur);
+  }
+
+  playWhoosh(startFreq: number, endFreq: number, dur: number) {
+    if (!this.ctx || !this.noiseBuf) return; const t = this.ctx.currentTime;
+    const noise = this.ctx.createBufferSource(); const filter = this.ctx.createBiquadFilter(); const gain = this.ctx.createGain();
+    noise.buffer = this.noiseBuf; filter.type = 'bandpass'; filter.Q.value = 1.5;
+    filter.frequency.setValueAtTime(startFreq, t); filter.frequency.exponentialRampToValueAtTime(endFreq, t + dur);
+    gain.gain.setValueAtTime(0, t); gain.gain.linearRampToValueAtTime(0.4, t + (dur * 0.2)); gain.gain.exponentialRampToValueAtTime(0.01, t + dur);
+    noise.connect(filter); filter.connect(gain); gain.connect(this.ctx.destination); noise.start(); noise.stop(t + dur);
+  }
+
+  playTone(freq: number, type: OscillatorType, dur: number, sweepFreq?: number) {
+    if (!this.ctx) return; const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator(); const gain = this.ctx.createGain(); osc.type = type;
+    osc.frequency.setValueAtTime(freq, t); if (sweepFreq) osc.frequency.exponentialRampToValueAtTime(sweepFreq, t + dur);
+    gain.gain.setValueAtTime(0.5, t); gain.gain.exponentialRampToValueAtTime(0.01, t + dur);
+    osc.connect(gain); gain.connect(this.ctx.destination); osc.start(); osc.stop(t + dur);
+  }
+
+  playGrunt(pitch: number) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator(); const gain = this.ctx.createGain(); const filter = this.ctx.createBiquadFilter();
+    osc.type = 'sawtooth'; osc.frequency.setValueAtTime(pitch, t); osc.frequency.exponentialRampToValueAtTime(pitch * 0.6, t + 0.3);
+    filter.type = 'lowpass'; filter.frequency.setValueAtTime(pitch * 3, t); filter.frequency.linearRampToValueAtTime(pitch, t + 0.3);
+    gain.gain.setValueAtTime(0, t); gain.gain.linearRampToValueAtTime(0.5, t + 0.05); gain.gain.exponentialRampToValueAtTime(0.01, t + 0.3);
+    osc.connect(filter); filter.connect(gain); gain.connect(this.ctx.destination); osc.start(); osc.stop(t + 0.3);
+  }
+
+  play(sound: string, charId?: string) {
+    if (!this.ctx) return; const t = this.ctx.currentTime;
+    switch(sound) {
+        case 'punchMiss': this.playWhoosh(400, 1500, 0.25); break;
+        case 'kickMiss': this.playWhoosh(200, 800, 0.35); break;
+        case 'punchHit': this.playImpact(150, 40, 'highpass', 1200, 0.3); break;
+        case 'kickHit': this.playImpact(250, 20, 'lowpass', 600, 0.4); break;
+        case 'block': this.playTone(800, 'triangle', 0.15, 100); this.playWhoosh(2000, 500, 0.1); break;
+        case 'dash': this.playWhoosh(800, 200, 0.4); break;
+        case 'superHit': this.playImpact(80, 10, 'lowpass', 2000, 1.0); break;
+        case 'laser': this.playTone(800, 'sawtooth', 1.0, 400); this.playWhoosh(4000, 1000, 1.0); break;
+        case 'shotgun': this.playImpact(200, 50, 'lowpass', 4000, 0.5); break;
+        case 'wave': this.playWhoosh(100, 400, 2.0); this.playTone(50, 'sine', 2.0, 20); break;
+        case 'firePillar': this.playWhoosh(100, 1000, 0.8); this.playImpact(80, 20, 'lowpass', 800, 0.6); break;
+        case 'hurt': this.playGrunt(charId === 'kumari' ? 350 : (charId === 'serpent' ? 500 : 180)); break;
+        case 'ko': 
+            const koOsc = this.ctx.createOscillator(); const koGain = this.ctx.createGain();
+            koOsc.type = 'sawtooth'; koOsc.frequency.setValueAtTime(150, t); koOsc.frequency.exponentialRampToValueAtTime(20, t + 2.0);
+            koGain.gain.setValueAtTime(0.8, t); koGain.gain.exponentialRampToValueAtTime(0.01, t + 2.0);
+            koOsc.connect(koGain); koGain.connect(this.ctx.destination); koOsc.start(); koOsc.stop(t + 2.0);
+            break;
+    }
+  }
+}
+
+// ==========================================
+// GAME ENGINE LOGIC
+// ==========================================
+class FighterGame {
+  canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D;
+  p1: PlayerState; p2: PlayerState; isHost: boolean; sound: SoundEngine;
+  stageId: StageId;
+  keys: { [key: string]: boolean } = {}; localInputHistory: InputEvent[] = [];
+  projectiles: Projectile[] = []; particles: any[] = []; bgParticles: any[] = []; volcanoParticles: any[] = [];
+  onStateChange: (state: any) => void; onGameOver: (winnerId: string) => void;
+  animationFrameId: number = 0; lastSyncTime: number = 0; remoteTargetState: PlayerState | null = null;
+  shakeFrames: number = 0; hitstopFrames: number = 0; superFlash: number = 0;
+  isSinglePlayer: boolean = false; isGameOver: boolean = false; winnerName: string | null = null;
+  timeOver: boolean = false; timeLeft: number = 120 * FPS; 
+  isPaused: boolean = false;
+  aiDifficulty: 'easy' | 'medium' | 'hard' = 'medium'; aiKeys: { [key: string]: boolean } = {};
+  aiActionTimer: number = 0; aiBlockTimer: number = 0; 
+  loadedImages: Record<string, HTMLImageElement> = {};
+
+  constructor(
+    canvas: HTMLCanvasElement, hostChar: CharId, guestChar: CharId, stageId: StageId,
+    isHost: boolean, isSinglePlayer: boolean, aiDifficulty: 'easy' | 'medium' | 'hard',
+    onStateChange: (state: any) => void, onGameOver: (winnerId: string) => void
+  ) {
+    this.canvas = canvas; this.ctx = canvas.getContext('2d')!;
+    this.isHost = isHost; this.isSinglePlayer = isSinglePlayer; this.aiDifficulty = aiDifficulty;
+    this.stageId = stageId;
+    this.onStateChange = onStateChange; this.onGameOver = onGameOver;
+    this.sound = new SoundEngine();
+
+    this.p1 = { x: 200, y: FLOOR_Y, vx: 0, vy: 0, hp: CHARACTERS[hostChar].health, maxHp: CHARACTERS[hostChar].health, displayHp: CHARACTERS[hostChar].health, dir: 1, action: 'idle', actionFrame: 0, charId: hostChar };
+    this.p2 = { x: 800, y: FLOOR_Y, vx: 0, vy: 0, hp: CHARACTERS[guestChar].health, maxHp: CHARACTERS[guestChar].health, displayHp: CHARACTERS[guestChar].health, dir: -1, action: 'idle', actionFrame: 0, charId: guestChar };
+
+    Object.keys(CHARACTERS).forEach(key => {
+      const img = new Image(); img.src = CHARACTERS[key as CharId].svg; this.loadedImages[key] = img;
+    });
+
+    for(let i=0; i<50; i++) {
+        this.bgParticles.push({ x: Math.random()*CANVAS_WIDTH, y: Math.random()*CANVAS_HEIGHT, size: Math.random()*2+1, speed: Math.random()*0.5+0.1 });
+    }
+
+    window.addEventListener('keydown', this.handleKeyDown, { passive: false });
+    window.addEventListener('keyup', this.handleKeyUp);
+  }
+
+  cleanup = () => {
+    cancelAnimationFrame(this.animationFrameId);
+    window.removeEventListener('keydown', this.handleKeyDown); window.removeEventListener('keyup', this.handleKeyUp);
+  }
+
+  togglePause = () => { this.isPaused = !this.isPaused; }
+
+  getActionFromCode = (code: string): string | null => {
+    if (['KeyA', 'ArrowLeft'].includes(code)) return 'left';
+    if (['KeyD', 'ArrowRight'].includes(code)) return 'right';
+    if (['KeyW', 'ArrowUp'].includes(code)) return 'jump';
+    if (['KeyS', 'ArrowDown'].includes(code)) return 'crouch';
+    if (['Space'].includes(code)) return 'block';
+    if (['KeyJ'].includes(code)) return 'attack';
+    if (['KeyK', 'ShiftLeft', 'ShiftRight'].includes(code)) return 'kick';
+    if (['KeyL'].includes(code)) return 'slam';
+    return null;
+  }
+
+  checkSequences = (action: string) => {
+    if (action !== 'attack' && action !== 'kick') return;
+    const now = Date.now();
+    const recent = this.localInputHistory.filter(e => now - e.time < 800); 
+    
+    const localP = this.isHost ? this.p1 : this.p2;
+    const remoteP = this.isHost ? this.p2 : this.p1;
+    const dist = Math.abs(localP.x - remoteP.x);
+
+    // --- 3x PUNCH COMBO ---
+    if (action === 'attack') {
+        const attackInputs = recent.filter(e => e.action === 'attack');
+        if (attackInputs.length >= 3 && dist <= 140) {
+            setTimeout(() => {
+                this.keys['punchCombo'] = true;
+                setTimeout(() => { this.keys['punchCombo'] = false; }, 100);
+            }, 10);
+            this.localInputHistory = this.localInputHistory.filter(e => e.action !== 'attack'); 
+            return; 
+        }
+    }
+
+    // --- 3x KICK COMBO ---
+    if (action === 'kick') {
+        const kickInputs = recent.filter(e => e.action === 'kick');
+        if (kickInputs.length >= 3 && dist <= 140) {
+            setTimeout(() => {
+                this.keys['kickCombo'] = true;
+                setTimeout(() => { this.keys['kickCombo'] = false; }, 100);
+            }, 10);
+            this.localInputHistory = this.localInputHistory.filter(e => e.action !== 'kick'); 
+            return; 
+        }
+    }
+
+    // --- L/R SPECIALS ---
+    let fwdIdx = -1; let backIdx = -1;
+    for (let i = recent.length - 1; i >= 0; i--) {
+        if (recent[i].action === action) continue;
+        if (fwdIdx === -1 && (recent[i].action === 'left' || recent[i].action === 'right')) {
+            fwdIdx = i;
+            const targetBack = recent[i].action === 'left' ? 'right' : 'left';
+            for(let j = i - 1; j >= 0; j--) {
+                if (recent[j].action === targetBack) { backIdx = j; break; }
+            }
+            break;
+        }
+    }
+    if (fwdIdx !== -1 && backIdx !== -1) {
+        setTimeout(() => {
+            const pRecent = (Date.now() - (this.localInputHistory.slice().reverse().find(e => e.action === 'attack')?.time || 0)) < 100 || this.keys['attack'];
+            const kRecent = (Date.now() - (this.localInputHistory.slice().reverse().find(e => e.action === 'kick')?.time || 0)) < 100 || this.keys['kick'];
+            if (pRecent && kRecent) this.keys['special3'] = true;
+            else if (action === 'attack') this.keys['special1'] = true;
+            else if (action === 'kick') this.keys['special2'] = true;
+            setTimeout(() => { this.keys['special1'] = false; this.keys['special2'] = false; this.keys['special3'] = false; }, 100);
+        }, 30);
+        this.localInputHistory = []; 
+    }
+  }
+
+  handleKeyDown = (e: KeyboardEvent) => { 
+    this.sound.init(); 
+    if (e.code === 'Escape' || e.code === 'KeyP') { this.togglePause(); return; }
+    const action = this.getActionFromCode(e.code);
+    if (action && !this.isPaused) {
+      if (['jump', 'attack', 'kick', 'block', 'left', 'right', 'crouch'].includes(action)) e.preventDefault(); 
+      if (!this.keys[action]) { this.localInputHistory.push({ action, time: Date.now() }); this.checkSequences(action); }
+      this.keys[action] = true; 
+    }
+  }
+  
+  handleKeyUp = (e: KeyboardEvent) => { const action = this.getActionFromCode(e.code); if (action) this.keys[action] = false; }
+  
+  handleTouch = (action: string, active: boolean) => {
+    this.sound.init();
+    if (this.isPaused) return;
+    if (active && !this.keys[action]) { this.localInputHistory.push({ action, time: Date.now() }); this.checkSequences(action); }
+    this.keys[action] = active;
+  }
+  
+  updateRemoteState = (newState: PlayerState) => { this.remoteTargetState = newState; }
+
+  createHitParticles = (x: number, y: number, color: string, heavy: boolean = false) => {
+    const count = heavy ? 30 : 15;
+    for (let i = 0; i < count; i++) {
+      this.particles.push({ x, y, vx: (Math.random() - 0.5) * (heavy ? 25 : 15), vy: (Math.random() - 0.5) * (heavy ? 25 : 15), life: 1.0, color, size: Math.random() * (heavy ? 6 : 4) + 2 });
+    }
+  }
+
+  updatePlayer = (p: PlayerState, opp: PlayerState, activeKeys: any) => {
+    const charStats = CHARACTERS[p.charId]; let stateChanged = false;
+    if (p.displayHp > p.hp) p.displayHp -= 5; if (p.displayHp < p.hp) p.displayHp = p.hp;
+    
+    const isDoingSpecial = p.action === 'special1' || p.action === 'special2' || p.action === 'special3' || p.action === 'punchCombo' || p.action === 'kickCombo' || p.action === 'uppercut' || p.action === 'slam';
+
+    if (p.action !== 'dead' && p.action !== 'hit' && !isDoingSpecial) {
+      if (['block', 'crouch', 'crouchBlock'].includes(p.action) && !activeKeys['block'] && !activeKeys['crouch']) { p.action = 'idle'; stateChanged = true; }
+
+      if (p.action !== 'attack' && p.action !== 'kick' && !['block', 'crouch', 'crouchBlock'].includes(p.action)) {
+        if (activeKeys['crouch'] && activeKeys['block']) { p.vx = 0; p.action = 'crouchBlock'; stateChanged = true; }
+        else if (activeKeys['crouch']) { p.vx = 0; p.action = 'crouch'; stateChanged = true; }
+        else if (activeKeys['left']) { p.vx = -charStats.speed; p.action = 'walk'; p.dir = -1; stateChanged = true; }
+        else if (activeKeys['right']) { p.vx = charStats.speed; p.action = 'walk'; p.dir = 1; stateChanged = true; }
+        else { p.vx = 0; p.action = 'idle'; }
+        if (activeKeys['jump'] && p.y >= FLOOR_Y && !activeKeys['crouch']) { p.vy = charStats.jumpPower; p.action = 'jump'; stateChanged = true; }
+      }
+
+      if (activeKeys['crouch'] && activeKeys['block'] && p.y >= FLOOR_Y && !['attack', 'kick'].includes(p.action)) { p.action = 'crouchBlock'; p.vx = 0; stateChanged = true; }
+      else if (activeKeys['block'] && p.y >= FLOOR_Y && !['attack', 'kick', 'crouch'].includes(p.action)) { p.action = 'block'; p.vx = 0; stateChanged = true; }
+      else if (activeKeys['crouch'] && p.y >= FLOOR_Y && !['attack', 'kick'].includes(p.action)) { if (p.action !== 'crouch') { p.action = 'crouch'; p.actionFrame = 0; stateChanged = true; } p.vx = 0; }
+      
+      if (activeKeys['slam'] && p.y >= FLOOR_Y && !['attack', 'kick'].includes(p.action)) { p.action = 'slam'; p.actionFrame = 0; p.vx = 0; stateChanged = true; }
+      else if (activeKeys['kickCombo']) { p.action = 'kickCombo'; p.actionFrame = 0; p.vx = 0; stateChanged = true; }
+      else if (activeKeys['punchCombo']) { p.action = 'punchCombo'; p.actionFrame = 0; p.vx = 0; stateChanged = true; }
+      else if (activeKeys['special3']) { p.action = 'special3'; p.actionFrame = 0; p.vx = 0; stateChanged = true; }
+      else if (activeKeys['special1']) { p.action = 'special1'; p.actionFrame = 0; p.vx = 0; stateChanged = true; }
+      else if (activeKeys['special2']) { p.action = 'special2'; p.actionFrame = 0; p.vx = 0; stateChanged = true; }
+      else if (activeKeys['crouch'] && activeKeys['attack'] && p.action !== 'uppercut') { p.action = 'uppercut'; p.actionFrame = 0; p.vx = 0; stateChanged = true; }
+      else if (activeKeys['attack'] && p.action !== 'attack' && p.action !== 'kick' && !['block', 'crouch', 'crouchBlock'].includes(p.action)) { p.action = 'attack'; p.actionFrame = 0; p.vx = 0; stateChanged = true; }
+      else if (activeKeys['kick'] && p.action !== 'attack' && p.action !== 'kick' && !['block', 'crouch', 'crouchBlock'].includes(p.action)) { p.action = 'kick'; p.actionFrame = 0; p.vx = 0; stateChanged = true; }
+    }
+
+    if (p.action === 'special1') {
+       p.actionFrame++;
+       if (p.actionFrame === 15) {
+           let proj: Projectile;
+           if (p.charId === 'bhairav') { 
+               this.sound.playWhoosh(100, 2000, 0.8); 
+               proj = { id: Math.random(), ownerId: p === this.p1 ? 'p1' : 'p2', charId: p.charId, type: 'fireball', x: p.x + p.dir * 60, y: p.y - 100, vx: p.dir * 18, vy: 0, active: true, width: 50, height: 40, hitsLeft: 1 }; 
+           } else if (p.charId === 'kumari') { 
+               this.sound.playImpact(1000, 50, 'highpass', 3000, 0.6); 
+               proj = { id: Math.random(), ownerId: p === this.p1 ? 'p1' : 'p2', charId: p.charId, type: 'lightning', x: opp.x, y: 0, vx: 0, vy: 40, active: true, width: 30, height: 200, hitsLeft: 1 }; 
+           } else if (p.charId === 'ned_kelly') { 
+               this.sound.play('shotgun'); 
+               proj = { id: Math.random(), ownerId: p === this.p1 ? 'p1' : 'p2', charId: p.charId, type: 'bullet', x: p.x + p.dir * 60, y: p.y - 100, vx: p.dir * 40, vy: 0, active: true, width: 60, height: 10, hitsLeft: 1 }; 
+           } else { 
+               this.sound.playGrunt(800); 
+               proj = { id: Math.random(), ownerId: p === this.p1 ? 'p1' : 'p2', charId: p.charId, type: 'venom', x: p.x + p.dir * 60, y: p.y - 100, vx: p.dir * 12, vy: -10, active: true, width: 30, height: 30, hitsLeft: 1 }; 
+           }
+           this.projectiles.push(proj); this.shakeFrames = 6;
+       }
+       if (p.actionFrame > 40) p.action = 'idle';
+    }
+
+    if (p.action === 'special2') {
+       p.actionFrame++;
+       
+       if (p.charId === 'bhairav') {
+           if (p.actionFrame === 10) {
+               this.superFlash = 3; this.sound.play('firePillar');
+               for(let i=1; i<=3; i++) {
+                   this.projectiles.push({ id: Math.random(), ownerId: p === this.p1 ? 'p1' : 'p2', charId: p.charId, type: 'fireball', x: p.x + (p.dir * 150 * i), y: FLOOR_Y, vx: 0, vy: -25, active: true, width: 60, height: 90, hitsLeft: 1, damageMult: 0.8 });
+               }
+           }
+           if (p.actionFrame > 45) p.action = 'idle';
+       } else if (p.charId === 'kumari') {
+           if (p.actionFrame === 5) { this.superFlash = 3; this.sound.play('laser'); }
+           if (p.actionFrame > 15 && p.actionFrame < 45) {
+               this.shakeFrames = 5;
+               if (p.actionFrame % 5 === 0 && Math.abs(p.y - opp.y) < 150 && ((p.dir === 1 && opp.x > p.x) || (p.dir === -1 && opp.x < p.x))) {
+                   opp.hp -= charStats.attackDamage * 0.3; opp.action = 'hit'; opp.actionFrame = 0; opp.vx = p.dir * 2;
+                   this.createHitParticles(opp.x, opp.y - 100, '#ffffff', false);
+               }
+           }
+           if (p.actionFrame > 60) p.action = 'idle';
+       } else if (p.charId === 'ned_kelly') {
+           if (p.actionFrame === 10) this.superFlash = 3;
+           if (p.actionFrame === 20 || p.actionFrame === 30 || p.actionFrame === 40) {
+               this.sound.play('shotgun'); this.shakeFrames = 8;
+               for(let i=-1; i<=1; i+=2) { this.projectiles.push({ id: Math.random(), ownerId: p === this.p1 ? 'p1' : 'p2', charId: p.charId, type: 'bullet', x: p.x + p.dir * 80, y: p.y - 100 + (i*20), vx: p.dir * 35, vy: i * 2, active: true, width: 40, height: 8, hitsLeft: 1, damageMult: 0.25 }); }
+           }
+           if (p.actionFrame > 60) p.action = 'idle';
+       } else if (p.charId === 'serpent') {
+           if (p.actionFrame === 10) {
+               this.superFlash = 3; this.sound.play('wave');
+               this.projectiles.push({ id: Math.random(), ownerId: p === this.p1 ? 'p1' : 'p2', charId: p.charId, type: 'wave', x: p.x + p.dir * 100, y: FLOOR_Y - 100, vx: p.dir * 8, vy: 0, active: true, width: 150, height: 250, hitsLeft: 5, damageMult: 0.5 });
+           }
+           if (p.actionFrame > 40) p.action = 'idle';
+       }
+    }
+
+    // ==========================================
+    // UPPERCUT (S + J)
+    // ==========================================
+    if (p.action === 'uppercut') {
+        p.actionFrame++;
+        if (p.actionFrame === 1) this.sound.play('dash');
+        const hitFrame = 10;
+        if (p.actionFrame === hitFrame) {
+            p.vx = p.dir * 4; 
+            const hitRange = 110;
+            if (Math.abs(p.x - opp.x) < hitRange && ((p.dir === 1 && opp.x > p.x) || (p.dir === -1 && opp.x < p.x))) {
+                if (!['block', 'crouchBlock'].includes(opp.action)) {
+                    this.sound.play('superHit'); this.sound.playGrunt(200);
+                    opp.hp -= charStats.attackDamage * 0.4; // Balanced damage
+                    opp.action = 'hit'; opp.actionFrame = 0;
+                    opp.vy = -22; opp.vx = p.dir * 2; // Massive vertical launch for ground-crash
+                    this.shakeFrames = 15; this.hitstopFrames = 5;
+                    this.createHitParticles(opp.x, opp.y - 100, '#ff0000', true);
+                } else {
+                    this.sound.play('block'); opp.hp -= charStats.attackDamage * 0.05;
+                    this.shakeFrames = 4; opp.vx = p.dir * 6;
+                    this.createHitParticles(opp.x - (p.dir * 30), opp.y - 60, '#00ffff');
+                }
+            }
+        }
+        if (p.actionFrame > 10 && p.actionFrame < 15) { p.vx = p.dir * 4; } else { p.vx = 0; }
+        if (p.actionFrame > 30) p.action = 'idle';
+    }
+
+    // ==========================================
+    // BODY SLAM (L - Unblockable Grab)
+    // ==========================================
+    if (p.action === 'slam') {
+        p.actionFrame++;
+        const inRange = Math.abs(p.x - opp.x) < 80 && ((p.dir === 1 && opp.x > p.x) || (p.dir === -1 && opp.x < p.x));
+
+        if (p.actionFrame === 8) {
+            if (inRange && !['jump', 'dead', 'hit'].includes(opp.action)) {
+                this.sound.play('punchMiss');
+                opp.action = 'hit'; opp.actionFrame = 0; 
+                opp.hp -= charStats.attackDamage * 0.1;
+                p.actionFrame = 10; // Connect and proceed to animation
+            } else {
+                this.sound.play('punchMiss');
+                p.actionFrame = 50; // Whiff recovery
+            }
+        } 
+        else if (p.actionFrame > 10 && p.actionFrame <= 30) {
+            opp.action = 'hit'; opp.actionFrame = 0; // Stun lock
+            
+            if (p.actionFrame < 30) {
+                opp.x = p.x + p.dir * 50; // Pin to hand
+                if (p.charId === 'bhairav') { opp.y = p.y - 100; } 
+                else if (p.charId === 'kumari') { opp.y -= 4; opp.x += p.dir * 3; } 
+                else if (p.charId === 'ned_kelly') { opp.y = p.y - 120; } 
+                else if (p.charId === 'serpent') { opp.x = p.x; opp.y = p.y; } // swallowed visual
+            } else if (p.actionFrame === 30) {
+                // The Cinematic Release & Throw Backwards!
+                this.sound.play('dash');
+                opp.hp -= charStats.attackDamage * 0.2; // Squeeze damage
+                opp.x = p.x - p.dir * 20; // Move behind slightly for clear visual launch
+                
+                // Physics-based launch arcs across the screen (OPPOSITE direction)
+                if (p.charId === 'bhairav') { opp.vy = -18; opp.vx = -p.dir * 25; }
+                else if (p.charId === 'kumari') { opp.vy = -14; opp.vx = -p.dir * 30; }
+                else if (p.charId === 'ned_kelly') { opp.vy = -24; opp.vx = -p.dir * 18; }
+                else if (p.charId === 'serpent') { opp.vy = -16; opp.vx = -p.dir * 28; }
+            }
+        }
+        if (p.actionFrame > 50) p.action = 'idle';
+    }
+
+    if (p.action === 'special3') {
+       p.actionFrame++;
+       if (p.actionFrame === 10) { this.sound.play('dash'); p.vx = p.dir * 25; this.superFlash = 3; }
+       else if (p.actionFrame > 10 && p.actionFrame <= 25) { 
+           if (Math.abs(p.x - opp.x) < 90) { 
+               if (!['block', 'crouchBlock'].includes(opp.action)) {
+                   p.actionFrame = 30; p.vx = 0; opp.action = 'hit'; opp.actionFrame = 0; this.hitstopFrames = 8; this.shakeFrames = 10; this.createHitParticles(opp.x, opp.y - 80, charStats.color, true); 
+               } else {
+                   this.sound.play('block'); opp.hp -= charStats.attackDamage * 0.15; this.shakeFrames = 8; this.hitstopFrames = 5; 
+                   opp.vx = p.dir * 12; p.vx = -p.dir * 5; p.actionFrame = 130; 
+                   this.createHitParticles(opp.x - (p.dir * 30), opp.y - 60, '#00ffff');
+               }
+           } 
+       }
+       else if (p.actionFrame === 26) { p.vx = 0; }
+       else if (p.actionFrame > 26 && p.actionFrame < 30) { if (p.actionFrame === 29) p.action = 'idle'; }
+       else if (p.actionFrame >= 30 && p.actionFrame <= 130) {
+           opp.x = p.x + p.dir * 80; opp.action = 'hit'; opp.actionFrame = 0;
+           if (p.actionFrame === 32 || p.actionFrame === 42) { this.sound.play('punchHit'); opp.hp -= charStats.attackDamage * 0.3; this.createHitParticles(opp.x, opp.y - 70, charStats.color, false); this.shakeFrames = 4; } 
+           else if (p.actionFrame === 55) { this.sound.play('kickHit'); opp.hp -= charStats.attackDamage * 0.4; this.createHitParticles(opp.x, opp.y - 80, '#ffff00', true); this.shakeFrames = 8; } 
+           else if (p.actionFrame === 75) { this.sound.play('superHit'); opp.hp -= charStats.attackDamage * 0.5; opp.vy = -15; this.createHitParticles(opp.x, opp.y - 100, '#ff0000', true); this.shakeFrames = 12; this.hitstopFrames = 5; } 
+           else if (p.actionFrame === 90) { p.vy = -18; p.vx = p.dir * 12; } 
+           else if (p.actionFrame === 100) { this.sound.play('superHit'); opp.hp -= charStats.attackDamage * 0.8; opp.vx = p.dir * 25; opp.vy = 15; this.createHitParticles(opp.x, opp.y - 60, '#ffffff', true); this.shakeFrames = 25; this.hitstopFrames = 10; this.superFlash = 3; }
+       }
+       if (p.actionFrame > 130 && p.y >= FLOOR_Y) { p.action = 'idle'; p.vx = 0; }
+    }
+
+    if (p.action === 'punchCombo') {
+       p.actionFrame++;
+       const inRange = Math.abs(p.x - opp.x) < 140 && ((p.dir === 1 && opp.x > p.x) || (p.dir === -1 && opp.x < p.x));
+
+       if (p.actionFrame === 8) { // Jab
+           this.sound.play('punchMiss');
+           if (inRange) {
+               if (!['block', 'crouchBlock'].includes(opp.action)) { this.sound.play('punchHit'); opp.hp -= charStats.attackDamage * 0.15; opp.action = 'hit'; opp.actionFrame = 0; this.createHitParticles(opp.x, opp.y - 80, '#ffffff', false); this.shakeFrames = 4; }
+               else { this.sound.play('block'); opp.hp -= charStats.attackDamage * 0.02; opp.vx = p.dir * 2; }
+           }
+       }
+       else if (p.actionFrame === 20) { // Cross
+           this.sound.play('punchMiss'); p.vx = p.dir * 8; 
+           if (inRange) {
+               if (!['block', 'crouchBlock'].includes(opp.action)) { this.sound.play('punchHit'); opp.hp -= charStats.attackDamage * 0.25; opp.action = 'hit'; opp.actionFrame = 0; this.createHitParticles(opp.x, opp.y - 75, '#ffcc00', false); this.shakeFrames = 6; }
+               else { this.sound.play('block'); opp.hp -= charStats.attackDamage * 0.03; opp.vx = p.dir * 3; }
+           }
+       }
+       else if (p.actionFrame === 35) { // Uppercut
+           this.sound.play('dash'); p.vx = p.dir * 12; 
+           if (inRange) {
+               if (!['block', 'crouchBlock'].includes(opp.action)) {
+                   this.sound.play('superHit'); opp.hp -= charStats.attackDamage * 0.5; opp.action = 'hit'; opp.actionFrame = 0;
+                   opp.vy = -22; opp.vx = p.dir * 4; 
+                   this.createHitParticles(opp.x, opp.y - 100, '#ff0000', true); this.shakeFrames = 15; this.hitstopFrames = 5;
+               } else {
+                   this.sound.play('block'); opp.hp -= charStats.attackDamage * 0.05; opp.vx = p.dir * 6;
+               }
+           }
+       }
+       else if (p.actionFrame > 55) { p.action = 'idle'; p.vx = 0; }
+    }
+
+    // ==========================================
+    // 3X KICK COMBO (TEEP -> ROUNDHOUSE -> BACK KICK)
+    // ==========================================
+    if (p.action === 'kickCombo') {
+       p.actionFrame++;
+       const inRange = Math.abs(p.x - opp.x) < 140 && ((p.dir === 1 && opp.x > p.x) || (p.dir === -1 && opp.x < p.x));
+
+       if (p.actionFrame === 10) { // Teep Push Kick
+           this.sound.play('kickMiss');
+           if (inRange) {
+               if (!['block', 'crouchBlock'].includes(opp.action)) { this.sound.play('kickHit'); opp.hp -= charStats.attackDamage * 0.15; opp.action = 'hit'; opp.actionFrame = 0; this.createHitParticles(opp.x, opp.y - 60, '#ffffff', false); this.shakeFrames = 4; opp.vx = p.dir * 4; }
+               else { this.sound.play('block'); opp.hp -= charStats.attackDamage * 0.02; opp.vx = p.dir * 2; }
+           }
+       }
+       else if (p.actionFrame === 25) { // Roundhouse Spin
+           this.sound.play('kickMiss'); p.vx = p.dir * 8; 
+           if (inRange) {
+               if (!['block', 'crouchBlock'].includes(opp.action)) { this.sound.play('kickHit'); opp.hp -= charStats.attackDamage * 0.25; opp.action = 'hit'; opp.actionFrame = 0; this.createHitParticles(opp.x, opp.y - 80, '#ffcc00', false); this.shakeFrames = 6; opp.vx = p.dir * 6; }
+               else { this.sound.play('block'); opp.hp -= charStats.attackDamage * 0.03; opp.vx = p.dir * 3; }
+           }
+       }
+       else if (p.actionFrame === 45) { // Back Kick Launcher
+           this.sound.play('dash'); p.vx = p.dir * 12; 
+           if (inRange) {
+               if (!['block', 'crouchBlock'].includes(opp.action)) {
+                   this.sound.play('superHit'); opp.hp -= charStats.attackDamage * 0.5; opp.action = 'hit'; opp.actionFrame = 0;
+                   opp.vy = -20; opp.vx = p.dir * 8; // Heavy launch up and forward
+                   this.createHitParticles(opp.x, opp.y - 70, '#ff0000', true); this.shakeFrames = 15; this.hitstopFrames = 5;
+               } else {
+                   this.sound.play('block'); opp.hp -= charStats.attackDamage * 0.05; opp.vx = p.dir * 6;
+               }
+           }
+       }
+       else if (p.actionFrame > 65) { p.action = 'idle'; p.vx = 0; }
+    }
+
+    if (p.action === 'attack' || p.action === 'kick') {
+      p.actionFrame++;
+      if (p.actionFrame === 1) this.sound.play(p.action === 'kick' ? 'kickMiss' : 'punchMiss');
+      const hitFrame = p.action === 'kick' ? 10 : 8; 
+      if (p.actionFrame === hitFrame) {
+        const hitRange = p.action === 'kick' ? 140 : 110;
+        if (Math.abs(p.x - opp.x) < hitRange && ((p.dir === 1 && opp.x > p.x) || (p.dir === -1 && opp.x < p.x))) {
+          if (!['block', 'crouchBlock'].includes(opp.action)) { this.sound.play(p.action === 'kick' ? 'kickHit' : 'punchHit'); this.sound.playGrunt(200); opp.hp -= charStats.attackDamage; opp.action = 'hit'; opp.actionFrame = 0; this.shakeFrames = 12; this.hitstopFrames = 3; this.createHitParticles(opp.x, opp.y - 80, '#ffffff', true); this.createHitParticles(opp.x, opp.y - 80, charStats.color, true); }
+          else { this.sound.play('block'); opp.hp -= charStats.attackDamage * 0.05; this.shakeFrames = 4; opp.vx = p.dir * 4; this.createHitParticles(opp.x - (p.dir * 30), opp.y - 60, '#00ffff'); }
+        }
+      }
+      if (p.actionFrame > (p.action === 'kick' ? 26 : 22)) p.action = 'idle'; 
+    }
+
+    // Preserve Airborne Momentum during hit-stun!
+    if (p.action === 'hit') { 
+        p.actionFrame++; 
+        if (p.y >= FLOOR_Y) {
+            // Sliding friction when on the ground
+            if (Math.abs(p.vx) > 5) p.vx *= 0.8; 
+            else if (opp.action !== 'special3' || opp.charId !== 'kumari') p.vx = p.dir === 1 ? -4 : 4; 
+            
+            if (p.actionFrame > 20) p.action = 'idle'; 
+        }
+    }
+
+    if (opp.hp <= 0 && !this.isGameOver) { this.sound.play('ko'); this.isGameOver = true; opp.hp = 0; opp.action = 'dead'; this.winnerName = charStats.name; this.onGameOver(p === this.p1 ? 'p1' : 'p2'); }
+    else if (opp.hp <= 0) { opp.hp = 0; opp.action = 'dead'; }
+
+    p.vy += GRAVITY; p.x += p.vx; p.y += p.vy;
+    
+    // Check Floor Collision & Ground Crashes
+    if (p.y >= FLOOR_Y) { 
+        if (p.vy > 14 && p.action === 'hit') {
+            this.sound.play('superHit');
+            this.createHitParticles(p.x, FLOOR_Y, '#e2e8f0', true);
+            this.shakeFrames = 15;
+            p.hp -= 30; // Balanced Fall Damage
+            p.actionFrame = 0; // Stun them heavily on ground impact
+        }
+        p.y = FLOOR_Y; p.vy = 0; 
+        if (p.action === 'jump') p.action = 'idle'; 
+    }
+
+    p.x = Math.max(50, Math.min(CANVAS_WIDTH - 50, p.x));
+    if (!['attack', 'kick', 'hit', 'dead', 'special1', 'special2', 'special3', 'punchCombo', 'kickCombo', 'uppercut', 'slam'].includes(p.action)) p.dir = opp.x > p.x ? 1 : -1;
+    return stateChanged;
+  }
+
+  updatePhysics = () => {
+    if (this.hitstopFrames > 0) { this.hitstopFrames--; return; }
+    if (!this.isGameOver && !this.isPaused) { 
+        this.timeLeft--; 
+        if (this.timeLeft <= 0) { 
+            this.timeLeft = 0; this.isGameOver = true; this.timeOver = true; this.sound.play('ko'); 
+            let winner = 'tie'; 
+            if (this.p1.hp > this.p2.hp) winner = 'p1'; 
+            else if (this.p2.hp > this.p1.hp) winner = 'p2'; 
+            
+            if (winner === 'tie') this.winnerName = 'NOBODY'; 
+            else this.winnerName = CHARACTERS[winner === 'p1' ? this.p1.charId : this.p2.charId].name; 
+            
+            this.p1.action = this.p1.hp <= 0 ? 'dead' : 'idle'; 
+            this.p2.action = this.p2.hp <= 0 ? 'dead' : 'idle'; 
+            this.onGameOver(winner); 
+        } 
+    }
+    
+    if (!this.isPaused) {
+        for(let p of this.bgParticles) {
+            p.y -= p.speed;
+            if (this.stageId === 'durbar' || this.stageId === 'outback') p.x -= p.speed; 
+            if (p.y < 0) { p.y = CANVAS_HEIGHT; p.x = Math.random()*CANVAS_WIDTH; }
+            if (p.x < 0) { p.x = CANVAS_WIDTH; }
+        }
+        
+        if (this.stageId === 'inferno') {
+            const peaks = [[150, FLOOR_Y-120], [400, FLOOR_Y-200], [800, FLOOR_Y-250]];
+            peaks.forEach(peak => {
+                if (Math.random() < 0.08) {
+                    this.volcanoParticles.push({
+                        x: peak[0] + (Math.random()*10 - 5), y: peak[1],
+                        vx: (Math.random()-0.5)*8, vy: -(Math.random()*12 + 4),
+                        life: 1.0, size: Math.random()*5 + 2,
+                        color: Math.random() > 0.5 ? '#ef4444' : '#f59e0b'
+                    });
+                }
+            });
+            for(let i = this.volcanoParticles.length - 1; i >= 0; i--) {
+                let p = this.volcanoParticles[i];
+                p.x += p.vx; p.y += p.vy; p.vy += GRAVITY * 0.4; p.life -= 0.015;
+                if (p.life <= 0 || p.y > FLOOR_Y) this.volcanoParticles.splice(i, 1);
+            }
+        }
+    }
+
+    const local = this.isHost ? this.p1 : this.p2; 
+    const remote = this.isHost ? this.p2 : this.p1;
+    let stateChanged = this.updatePlayer(local, remote, this.keys);
+    
+    // AI LOGIC WITH PACING
+    if (this.isSinglePlayer) { 
+        this.aiKeys = { left: false, right: false, jump: false, attack: false, kick: false, block: false, special1: false, special2: false, special3: false, punchCombo: false, kickCombo: false, crouch: false, slam: false }; 
+        const dist = Math.abs(remote.x - local.x); 
+        const isPlayerAttacking = ['attack', 'kick', 'special1', 'special2', 'special3', 'punchCombo', 'kickCombo', 'uppercut', 'slam'].includes(local.action); 
+        
+        if (this.aiActionTimer > 0) this.aiActionTimer--;
+        if (this.aiBlockTimer > 0) this.aiBlockTimer--;
+
+        if (remote.action !== 'hit' && remote.action !== 'dead') { 
+            let blockChance = 0, attackChance = 0, kickChance = 0, special1Chance = 0, special2Chance = 0, special3Chance = 0, punchComboChance = 0, kickComboChance = 0, advanceChance = 0, retreatChance = 0; 
+            let cooldownMult = 1;
+
+            if (this.aiDifficulty === 'easy') { 
+                blockChance = 0.005; attackChance = dist <= 120 ? 0.01 : 0; advanceChance = 0.2; retreatChance = 0.1; cooldownMult = 3;
+            } else if (this.aiDifficulty === 'medium') { 
+                blockChance = 0.03; attackChance = dist <= 110 ? 0.02 : 0; kickChance = (dist > 80 && dist <= 140) ? 0.01 : 0.005; special1Chance = dist > 250 ? 0.005 : 0; punchComboChance = dist <= 120 ? 0.01 : 0; kickComboChance = dist <= 130 ? 0.01 : 0; advanceChance = 0.5; retreatChance = 0.1; cooldownMult = 1.5;
+            } else { 
+                blockChance = 0.08; attackChance = dist <= 110 && !isPlayerAttacking ? 0.03 : 0; kickChance = (dist > 80 && dist <= 140) ? 0.02 : 0; special1Chance = dist > 250 ? 0.01 : 0; special2Chance = dist > 150 && dist < 250 ? 0.005 : 0; special3Chance = dist < 120 && !isPlayerAttacking ? 0.005 : 0; punchComboChance = dist <= 120 && !isPlayerAttacking ? 0.02 : 0; kickComboChance = dist <= 130 && !isPlayerAttacking ? 0.02 : 0;
+                if (dist > 140) advanceChance = 0.7; else if (dist < 80 && !isPlayerAttacking) retreatChance = 0.3; else advanceChance = 0.3; 
+                cooldownMult = 0.8;
+            } 
+            
+            // Defend Layer
+            if (isPlayerAttacking && this.aiBlockTimer <= 0 && Math.random() < blockChance) {
+                this.aiKeys['block'] = true; 
+                if (['bullet', 'fireball'].includes(local.action)) this.aiKeys['crouch'] = true; // Auto crouch block for projectiles
+                this.aiBlockTimer = 45; // Hold block
+            } else if (this.aiBlockTimer > 0) {
+                this.aiKeys['block'] = true;
+            }
+
+            // Attack & Movement Layer
+            if (!this.aiKeys['block']) {
+                if (this.aiActionTimer <= 0) {
+                    if (Math.random() < special3Chance) { this.aiKeys['special3'] = true; this.aiActionTimer = 90 * cooldownMult; }
+                    else if (Math.random() < punchComboChance) { this.aiKeys['punchCombo'] = true; this.aiActionTimer = 60 * cooldownMult; }
+                    else if (Math.random() < kickComboChance) { this.aiKeys['kickCombo'] = true; this.aiActionTimer = 60 * cooldownMult; }
+                    else if (Math.random() < special2Chance) { this.aiKeys['special2'] = true; this.aiActionTimer = 120 * cooldownMult; }
+                    else if (Math.random() < special1Chance) { this.aiKeys['special1'] = true; this.aiActionTimer = 80 * cooldownMult; }
+                    else if (dist < 80 && Math.random() < attackChance * 0.5) { this.aiKeys['slam'] = true; this.aiActionTimer = 50 * cooldownMult; } 
+                    else if (Math.random() < attackChance) { this.aiKeys['attack'] = true; this.aiActionTimer = 30 * cooldownMult; }
+                    else if (Math.random() < kickChance) { this.aiKeys['kick'] = true; this.aiActionTimer = 40 * cooldownMult; }
+                }
+
+                if (!this.aiKeys['attack'] && !this.aiKeys['kick'] && !this.aiKeys['slam'] && !this.aiKeys['special1'] && !this.aiKeys['special2'] && !this.aiKeys['special3'] && !this.aiKeys['punchCombo'] && !this.aiKeys['kickCombo'] && remote.action === 'idle') { 
+                    if (dist <= 100 && local.y < FLOOR_Y - 50 && Math.random() < 0.1 / cooldownMult) {
+                        this.aiKeys['crouch'] = true;
+                        this.aiKeys['attack'] = true;
+                    }
+                    else if (Math.random() < 0.01 / cooldownMult) this.aiKeys['jump'] = true; 
+                    else {
+                        const goLeft = remote.x > local.x; 
+                        if (Math.random() < advanceChance && dist > 90) this.aiKeys[goLeft ? 'left' : 'right'] = true; 
+                        else if (Math.random() < retreatChance) this.aiKeys[goLeft ? 'right' : 'left'] = true; 
+                    }
+                }
+            } 
+        } 
+        this.updatePlayer(remote, local, this.aiKeys); 
+    } else { 
+        if (this.remoteTargetState) { 
+            const lerpSpeed = 0.4; remote.x += (this.remoteTargetState.x - remote.x) * lerpSpeed; remote.y += (this.remoteTargetState.y - remote.y) * lerpSpeed; remote.hp = this.remoteTargetState.hp; 
+            if (remote.action !== this.remoteTargetState.action) { remote.action = this.remoteTargetState.action; remote.actionFrame = 0; } 
+            remote.dir = this.remoteTargetState.dir; 
+        } 
+    }
+    
+    // PROJECTILE PHYSICS WITH DODGING
+    for (let proj of this.projectiles) {
+        if (!proj.active) continue;
+        proj.x += proj.vx; proj.y += proj.vy;
+        if (proj.type === 'venom') proj.vy += GRAVITY * 0.4; 
+        const target = proj.ownerId === 'p1' ? this.p2 : this.p1;
+        const hitX = Math.abs(proj.x - target.x) < proj.width/2 + 40;
+        const hitY = Math.abs(proj.y - (target.y - 60)) < proj.height/2 + 60;
+
+        const isDodging = ['crouch', 'crouchBlock'].includes(target.action) && ['fireball', 'bullet', 'darkSkull'].includes(proj.type);
+
+        if (hitX && hitY && proj.type !== 'darkSpike' && !isDodging) { 
+            proj.hitsLeft--;
+            if (proj.hitsLeft <= 0) proj.active = false;
+            const mult = proj.damageMult || 0.8;
+            if (!['block', 'crouchBlock'].includes(target.action)) {
+               this.sound.play('kickHit'); target.hp -= CHARACTERS[proj.charId].attackDamage * mult; target.action = 'hit'; target.actionFrame = 0; target.vx = (proj.vx > 0 ? 1 : -1) * 8; this.createHitParticles(target.x, target.y - 50, CHARACTERS[proj.charId].color, true); this.shakeFrames = proj.type === 'wave' ? 15 : 8;
+            } else {
+               this.sound.play('block'); target.hp -= CHARACTERS[proj.charId].attackDamage * 0.05; target.vx = (proj.vx > 0 ? 1 : -1) * 5; this.createHitParticles(target.x, target.y - 50, '#00ffff', false);
+            }
+        } else if (proj.type === 'darkSpike' && hitX && target.y >= FLOOR_Y - 50) { 
+            proj.hitsLeft--; proj.active = false;
+            if (!['block', 'crouchBlock'].includes(target.action)) {
+                this.sound.play('superHit'); target.hp -= CHARACTERS[proj.charId].attackDamage * (proj.damageMult || 0.8); target.action = 'hit'; target.actionFrame = 0; target.vy = -12; this.createHitParticles(target.x, target.y - 50, '#4c1d95', true); this.shakeFrames = 15;
+            } else {
+                this.sound.play('block'); target.hp -= CHARACTERS[proj.charId].attackDamage * 0.05; target.vx = (proj.x > target.x ? -1 : 1) * 5; this.createHitParticles(target.x, target.y - 50, '#00ffff', false);
+            }
+        }
+        
+        if (proj.y < -500 || proj.y > FLOOR_Y + 100 || proj.x < -200 || proj.x > CANVAS_WIDTH + 200) {
+             proj.active = false;
+             if (proj.y >= FLOOR_Y && proj.type === 'venom') this.createHitParticles(proj.x, FLOOR_Y, '#00ff00', false);
+        }
+    }
+    this.projectiles = this.projectiles.filter(p => p.active);
+
+    if (!this.isSinglePlayer) { const now = Date.now(); if (stateChanged || now - this.lastSyncTime > 100) { this.onStateChange({ x: Math.round(local.x), y: Math.round(local.y), hp: local.hp, action: local.action, dir: local.dir, vx: local.vx, vy: local.vy }); this.lastSyncTime = now; } }
+  }
+
+  // ==========================================
+  // STAGE & BACKGROUND RENDERING
+  // ==========================================
+  drawBackground = () => {
+      const stage = STAGES[this.stageId];
+      const grad = this.ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT); 
+      grad.addColorStop(0, stage.color2); grad.addColorStop(1, stage.color1); 
+      this.ctx.fillStyle = grad; this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+      this.ctx.save();
+      
+      // Stage Specific Render Logic
+      if (this.stageId === 'inferno') {
+          this.ctx.fillStyle = '#ea580c';
+          for(let p of this.bgParticles) { this.ctx.globalAlpha=Math.random()*0.5+0.5; this.ctx.beginPath(); this.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); this.ctx.fill(); }
+          this.ctx.globalAlpha = 1.0;
+          
+          this.ctx.fillStyle = '#2b1b19'; 
+          this.ctx.beginPath(); this.ctx.moveTo(0, FLOOR_Y); this.ctx.lineTo(150, FLOOR_Y-120); this.ctx.lineTo(250, FLOOR_Y-80); this.ctx.lineTo(400, FLOOR_Y-200); this.ctx.lineTo(600, FLOOR_Y-100); this.ctx.lineTo(800, FLOOR_Y-250); this.ctx.lineTo(1000, FLOOR_Y); this.ctx.fill();
+          
+          for(let p of this.volcanoParticles) {
+              this.ctx.globalAlpha = Math.max(0, p.life);
+              this.ctx.fillStyle = p.color;
+              this.ctx.beginPath(); this.ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); this.ctx.fill();
+          }
+          this.ctx.globalAlpha = 1.0;
+
+          this.ctx.fillStyle = '#ea580c'; this.ctx.fillRect(0, FLOOR_Y, CANVAS_WIDTH, CANVAS_HEIGHT - FLOOR_Y);
+          this.ctx.fillStyle = '#9a3412'; this.ctx.fillRect(0, FLOOR_Y+15, CANVAS_WIDTH, CANVAS_HEIGHT - FLOOR_Y);
+      } 
+      else if (this.stageId === 'durbar') {
+          this.ctx.fillStyle = '#fef08a'; this.ctx.shadowColor = '#facc15'; this.ctx.shadowBlur = 50;
+          this.ctx.beginPath(); this.ctx.arc(CANVAS_WIDTH/2, FLOOR_Y - 80, 100, 0, Math.PI*2); this.ctx.fill(); this.ctx.shadowBlur = 0;
+          
+          this.ctx.fillStyle = '#1c1917';
+          const drawPagoda = (x: number, scale: number) => {
+              this.ctx.fillRect(x-20*scale, FLOOR_Y-150*scale, 40*scale, 150*scale); 
+              this.ctx.beginPath(); this.ctx.moveTo(x-60*scale, FLOOR_Y-150*scale); this.ctx.lineTo(x+60*scale, FLOOR_Y-150*scale); this.ctx.lineTo(x, FLOOR_Y-200*scale); this.ctx.fill(); 
+              this.ctx.fillRect(x-15*scale, FLOOR_Y-230*scale, 30*scale, 30*scale); 
+              this.ctx.beginPath(); this.ctx.moveTo(x-40*scale, FLOOR_Y-230*scale); this.ctx.lineTo(x+40*scale, FLOOR_Y-230*scale); this.ctx.lineTo(x, FLOOR_Y-270*scale); this.ctx.fill(); 
+          }
+          drawPagoda(150, 0.8); drawPagoda(850, 1.2); drawPagoda(CANVAS_WIDTH/2 + 200, 0.5);
+
+          this.ctx.fillStyle = '#292524'; this.ctx.fillRect(0, FLOOR_Y, CANVAS_WIDTH, CANVAS_HEIGHT - FLOOR_Y);
+          this.ctx.strokeStyle = '#44403c'; this.ctx.lineWidth = 2; this.ctx.beginPath(); this.ctx.moveTo(0, FLOOR_Y+10); this.ctx.lineTo(CANVAS_WIDTH, FLOOR_Y+10); this.ctx.stroke();
+      }
+      else if (this.stageId === 'outback') {
+          this.ctx.fillStyle = '#fde68a';
+          for(let p of this.bgParticles) { this.ctx.globalAlpha=0.4; this.ctx.fillRect(p.x, p.y/2, p.size, p.size); }
+          this.ctx.globalAlpha = 1.0;
+
+          this.ctx.fillStyle = '#451a03';
+          this.ctx.beginPath(); this.ctx.moveTo(100, FLOOR_Y); this.ctx.quadraticCurveTo(200, FLOOR_Y-180, 400, FLOOR_Y-180); this.ctx.lineTo(700, FLOOR_Y-180); this.ctx.quadraticCurveTo(850, FLOOR_Y-180, 950, FLOOR_Y); this.ctx.fill();
+          this.ctx.fillStyle = '#78350f'; this.ctx.fillRect(0, FLOOR_Y, CANVAS_WIDTH, CANVAS_HEIGHT - FLOOR_Y);
+      }
+      else if (this.stageId === 'opera') {
+          this.ctx.fillStyle = '#ffffff';
+          for(let p of this.bgParticles) { this.ctx.globalAlpha=Math.random(); this.ctx.fillRect(p.x, p.y, 2, 2); }
+          this.ctx.globalAlpha = 1.0;
+
+          this.ctx.fillStyle = '#cbd5e1';
+          const drawSail = (x: number, w: number, h: number) => {
+              this.ctx.beginPath(); this.ctx.moveTo(x, FLOOR_Y); this.ctx.quadraticCurveTo(x-w*0.2, FLOOR_Y-h, x-w, FLOOR_Y-h*1.2); this.ctx.quadraticCurveTo(x+w*0.5, FLOOR_Y-h*0.5, x+w, FLOOR_Y); this.ctx.fill();
+          }
+          drawSail(400, 80, 150); drawSail(450, 100, 200); drawSail(520, 60, 120); drawSail(650, 90, 180); drawSail(700, 70, 130);
+          this.ctx.fillStyle = '#0f172a'; this.ctx.fillRect(250, FLOOR_Y-20, 550, 20);
+          this.ctx.fillStyle = '#064e3b'; this.ctx.fillRect(0, FLOOR_Y, CANVAS_WIDTH, CANVAS_HEIGHT - FLOOR_Y);
+          this.ctx.fillStyle = 'rgba(45, 212, 191, 0.2)'; 
+          for(let i=0; i<5; i++) this.ctx.fillRect(0, FLOOR_Y + i*20 + (Math.sin(Date.now()/500 + i)*5), CANVAS_WIDTH, 10);
+      }
+
+      this.ctx.restore();
+  }
+
+  // ==========================================
+  // REALISTIC, CHARACTER-SPECIFIC RENDERING
+  // ==========================================
+  drawCharacter = (p: PlayerState) => {
+    const stats = CHARACTERS[p.charId]; const img = this.loadedImages[p.charId];
+    if (!img || !img.complete || img.naturalWidth === 0) return; 
+
+    this.ctx.save(); this.ctx.translate(p.x, p.y); this.ctx.scale(p.dir, 1); 
+    this.ctx.fillStyle = 'rgba(0,0,0,0.6)'; this.ctx.beginPath(); this.ctx.ellipse(0, 5, 50, 12, 0, 0, Math.PI * 2); this.ctx.fill();
+
+    const t = Date.now() / 100;
+
+    // --- THE DOG COMPANION (SHVAN) ---
+    if (p.charId === 'bhairav') {
+        let dogX = -50; let dogY = 0;
+        if (p.action === 'walk') { dogX = -60 + Math.sin(t*2)*10; dogY = -2 + Math.abs(Math.cos(t*4))*4; } 
+        else if (['idle', 'crouch', 'crouchBlock'].includes(p.action)) { dogY = 2; } 
+        else { dogX = -80; }
+        
+        this.ctx.save(); this.ctx.translate(dogX, dogY); this.ctx.fillStyle = '#0f172a'; 
+        this.ctx.beginPath(); this.ctx.ellipse(0, -10, 16, 10, 0, 0, Math.PI*2); this.ctx.fill(); 
+        this.ctx.beginPath(); this.ctx.arc(14, -20, 8, 0, Math.PI*2); this.ctx.fill(); 
+        this.ctx.beginPath(); this.ctx.moveTo(10, -26); this.ctx.lineTo(2, -36); this.ctx.lineTo(14, -28); this.ctx.fill(); 
+        this.ctx.lineWidth=3; this.ctx.strokeStyle='#0f172a'; 
+        this.ctx.beginPath(); this.ctx.moveTo(-15, -12); this.ctx.quadraticCurveTo(-25, -20, -20 + Math.sin(t*5)*5, -30); this.ctx.stroke(); 
+        this.ctx.lineWidth = 4; let dLx = -6, dRx = 6;
+        if (p.action === 'walk' && !this.isPaused) { dLx = -6 + Math.sin(t*4)*5; dRx = 6 + Math.cos(t*4)*5; }
+        this.ctx.beginPath(); this.ctx.moveTo(-8, -4); this.ctx.lineTo(dLx, 4); this.ctx.stroke();
+        this.ctx.beginPath(); this.ctx.moveTo(8, -4); this.ctx.lineTo(dRx, 4); this.ctx.stroke();
+        this.ctx.fillStyle = '#ef4444'; this.ctx.beginPath(); this.ctx.arc(16, -22, 1.5, 0, Math.PI*2); this.ctx.fill(); 
+        this.ctx.restore();
+    }
+
+    let scaleX = 1, scaleY = 1, rotate = 0, baseOffset = 0; let vAct = p.action;
+
+    if (p.action === 'special3') { vAct = 'special3'; if (p.actionFrame < 25) { rotate = 0.3; baseOffset = 15; } else if (p.actionFrame < 50) { rotate = p.actionFrame % 10 < 5 ? 0.1 : -0.1; } else if (p.actionFrame < 70) { rotate = 0; baseOffset = 0; } else if (p.actionFrame < 90) { rotate = -0.15; baseOffset = -10; } else { rotate = -1.2; baseOffset = 20; } }
+    else if (p.action === 'punchCombo') { vAct = 'punchCombo'; const af = p.actionFrame; if (af < 12) { rotate = 0.1; baseOffset = 2; } else if (af < 25) { rotate = 0.2; baseOffset = 5; scaleX = 1.1; } else if (af < 45) { rotate = -0.2; baseOffset = -5; scaleY = 1.1; scaleX = 0.9; } }
+    else if (p.action === 'kickCombo') { vAct = 'kickCombo'; }
+    
+    if (vAct === 'walk') { baseOffset = Math.abs(Math.sin(t)) * 5; rotate = Math.sin(t/1.5) * 0.05; }
+    else if (vAct === 'jump') { scaleY = 1.1; scaleX = 0.9; }
+    else if (vAct === 'attack') { scaleX = 1.1; scaleY = 0.9; rotate = 0.15; baseOffset = 5; }
+    else if (vAct === 'kick') { scaleX = 1.05; scaleY = 0.95; rotate = -0.1; baseOffset = 10; }
+    else if (vAct === 'block') { rotate = -0.1; scaleX = 0.95; baseOffset = 5; }
+    else if (vAct === 'hit') { rotate = -0.2; scaleX = 1.05; scaleY = 0.95; }
+    else if (vAct === 'crouch' || vAct === 'crouchBlock') { scaleY = 0.7; baseOffset = 40; }
+    else if (vAct === 'uppercut') { if (p.actionFrame < 10) { scaleY = 0.8; baseOffset = 20; } else { rotate = -0.15; baseOffset = -20; scaleY = 1.1; scaleX = 0.9; } }
+    else if (vAct === 'special1' || vAct === 'special2') { rotate = -0.1; scaleX = 0.9; baseOffset = 5; }
+    else if (vAct === 'dead') { rotate = -Math.PI / 2; baseOffset = 130; }
+    else if (!['special3', 'punchCombo', 'kickCombo', 'crouch', 'crouchBlock', 'uppercut', 'slam'].includes(vAct)) { scaleY = 1 + Math.sin(t/3) * 0.02; }
+
+    this.ctx.rotate(rotate); this.ctx.scale(scaleX, scaleY); this.ctx.translate(0, baseOffset);
+    this.ctx.save(); this.ctx.lineCap = 'round'; this.ctx.lineJoin = 'round';
+    
+    // --- KINEMATIC JOINTS ---
+    let lx1 = -10, ly1 = -60, lx2 = -20, ly2 = -30, lx3 = -15, ly3 = 0; 
+    let rx1 = 10, ry1 = -60, rx2 = 20, ry2 = -30, rx3 = 15, ry3 = 0;   
+    let fsX = -15, fsY = -125, feX = -20, feY = -90, fhX = -15, fhY = -50; 
+    let bsX = 15, bsY = -125, beX = 20, beY = -90, bhX = 15, bhY = -50;    
+
+    if (vAct === 'walk') {
+        lx3 = -15 + Math.sin(t)*35; ly3 = -Math.max(0, Math.cos(t)*20); lx2 = -20 + Math.sin(t)*15;
+        rx3 = 15 + Math.sin(t+Math.PI)*35; ry3 = -Math.max(0, Math.cos(t+Math.PI)*20); rx2 = 20 + Math.sin(t+Math.PI)*15;
+        feX = -20 + Math.sin(t+Math.PI)*10; fhX = -15 + Math.sin(t+Math.PI)*25; fhY = -60;
+        beX = 20 + Math.sin(t)*10; bhX = 15 + Math.sin(t)*25; bhY = -60;
+    } else if (vAct === 'attack') {
+        lx3 = -35; lx2 = -25; rx3 = 45; rx2 = 35; ly1 += 10; ry1 += 10; 
+        feX = 35; feY = -125; fhX = 80; fhY = -125; beX = 5; beY = -90; bhX = 25; bhY = -135;   
+    } else if (vAct === 'kick') {
+        lx3 = -25; ly3 = 0; lx2 = -15; ly2 = -30; rx3 = 70; ry3 = -50; rx2 = 35; ry2 = -40; ly1 += 15; ry1 += 15; 
+        feX = -35; feY = -100; fhX = -50; fhY = -80; beX = -10; beY = -100; bhX = -25; bhY = -80;
+    } else if (vAct === 'block') {
+        ly1 += 15; ry1 += 15; ly2 += 15; ry2 += 15; lx2 -= 5; rx2 += 5;
+        feX = 5; feY = -90; fhX = 20; fhY = -140; beX = 25; beY = -90; bhX = 35; bhY = -130;  
+    } else if (vAct === 'crouch') {
+        ly1 += 20; ry1 += 20; lx2 -= 20; rx2 += 20; ly2 += 20; ry2 += 20;
+        feX = 10; feY = -60; fhX = 30; fhY = -50; beX = 20; beY = -70; bhX = 40; bhY = -60;
+    } else if (vAct === 'crouchBlock') {
+        ly1 += 20; ry1 += 20; lx2 -= 20; rx2 += 20; ly2 += 20; ry2 += 20;
+        feX = 5; feY = -90; fhX = 20; fhY = -140; beX = 25; beY = -90; bhX = 35; bhY = -130;
+    } else if (vAct === 'jump') {
+        ly2 -= 20; ly3 -= 40; ry2 -= 20; ry3 -= 40;
+    } else if (vAct === 'hit') {
+        lx3 -= 10; rx3 += 30; ly1 -= 10; ry1 -= 10;
+        feX = -30; feY = -140; fhX = -50; fhY = -160; beX = -10; beY = -140; bhX = -20; bhY = -170;
+    } else if (vAct === 'special1' || vAct === 'special2') {
+        ly1 += 10; ry1 += 10; lx2 -= 10; rx2 += 10; 
+        feX = 30; feY = -100; fhX = 50; fhY = -110; beX = 20; beY = -100; bhX = 40; bhY = -110;   
+    } else if (vAct === 'dead') {
+        ly1 = -20; ry1 = -20; lx2 = -40; ly2 = -10; lx3 = -60; ly3 = 0; rx2 = 40; ry2 = -10; rx3 = 60; ry3 = 0;
+    } else if (vAct === 'special3') {
+        const af = p.actionFrame;
+        if (af < 25) { lx3 = -10; ly3 = 0; rx3 = 40; ry3 = -20; } 
+        else if (af < 50) { if (af % 10 < 5) { lx3 = -35; lx2 = -25; rx3 = 45; rx2 = 35; feX = 35; feY = -125; fhX = 80; fhY = -125; ly1 += 10; ry1 += 10; } else { lx3 = -25; ly3 = 0; lx2 = -15; ly2 = -30; rx3 = 70; ry3 = -50; rx2 = 35; ry2 = -40; ly1 += 15; ry1 += 15; feX = -35; feY = -100; fhX = -50; fhY = -80; } } 
+        else if (af < 70) { rx3 = 90; ry3 = -70; rx2 = 50; ry2 = -60; fhX = -40; fhY = -80; } 
+        else if (af < 90) { feX = 20; feY = -150; fhX = 20; fhY = -240; lx3 = -10; rx3 = 20; ry3 = -10; } 
+        else { rx3 = 90; ry3 = -20; rx2 = 50; ry2 = -10; fhX = -40; fhY = -100; } 
+    } else if (vAct === 'punchCombo') {
+        const af = p.actionFrame;
+        if (af < 12) { feX = 35; feY = -100; fhX = 70; fhY = -100; beX = 10; beY = -90; bhX = 20; bhY = -120; lx3 = -20; lx2 = -15; rx3 = 25; rx2 = 20; ly1 += 5; ry1 += 5; } // Jab
+        else if (af < 25) { feX = -10; feY = -90; fhX = -20; fhY = -120; beX = 45; beY = -100; bhX = 90; bhY = -100; lx3 = -30; lx2 = -20; rx3 = 35; rx2 = 25; ly1 += 10; ry1 += 10; } // Cross
+        else if (af < 45) { feX = 20; feY = -160; fhX = 30; fhY = -220; beX = -10; beY = -80; bhX = -20; bhY = -60; lx3 = -10; lx2 = -10; rx3 = 10; rx2 = 10; ly2 -= 10; ry2 -= 10; } // Uppercut
+    } else if (vAct === 'kickCombo') {
+        const af = p.actionFrame;
+        if (af < 15) { lx3 = -20; ly3 = 0; lx2 = -15; ly2 = -30; rx3 = 60; ry3 = -20; rx2 = 40; ry2 = -20; ly1 += 10; ry1 += 10; feX = -20; feY = -100; fhX = -30; fhY = -80; beX = -10; beY = -100; bhX = -15; bhY = -80; } // Teep Push Kick
+        else if (af < 35) { lx3 = -25; ly3 = 0; lx2 = -15; ly2 = -30; rx3 = 70; ry3 = -60; rx2 = 35; ry2 = -40; ly1 += 15; ry1 += 15; feX = 20; feY = -120; fhX = 40; fhY = -100; } // Roundhouse
+        else if (af < 55) { lx3 = 0; ly3 = 0; lx2 = 10; ly2 = -30; rx3 = 90; ry3 = -30; rx2 = 50; ry2 = -40; feX = -30; feY = -80; fhX = -40; fhY = -60; } // Back Kick Launcher
+    } else if (vAct === 'slam') {
+        const af = p.actionFrame;
+        if (af < 10) { feX = 40; feY = -100; fhX = 60; fhY = -100; } // reach
+        else if (af < 30) { feX = 20; feY = -150; fhX = 30; fhY = -200; beX = -10; beY = -140; bhX = -20; bhY = -180; } // lift
+        else { feX = -40; feY = -120; fhX = -60; fhY = -100; beX = -30; beY = -100; bhX = -50; bhY = -80; } // Heave BACKWARD!
+    } else {
+        feX = -20; feY = -90; fhX = -10; fhY = -60 + Math.sin(t)*5; beX = 20; beY = -90; bhX = 10; bhY = -60 + Math.sin(t+Math.PI)*5;
+    }
+
+    // DRAW BACK ARM
+    this.ctx.strokeStyle = stats.secondaryColor; this.ctx.lineWidth = 14;
+    this.ctx.beginPath(); this.ctx.moveTo(bsX, bsY); this.ctx.lineTo(beX, beY); this.ctx.lineTo(bhX, bhY); this.ctx.stroke();
+    this.ctx.fillStyle = stats.color; this.ctx.beginPath(); this.ctx.arc(bhX, bhY, 12, 0, Math.PI*2); this.ctx.fill(); 
+
+    // --- BHAIRAV EXTRA ARMS & TRIDENT ---
+    if (p.charId === 'bhairav') {
+        // Left Extra Arm (Trident Hand)
+        this.ctx.strokeStyle = stats.color; this.ctx.lineWidth = 12;
+        let tx1 = -20, ty1 = -120, tx2 = -40, ty2 = -150, tx3 = -30, ty3 = -180;
+        
+        if (vAct === 'attack' || (vAct === 'special3' && p.actionFrame < 50)) { tx2 = 20; ty2 = -120; tx3 = 60; ty3 = -120; }
+        else if (vAct === 'special2') { tx2 = 0; ty2 = -80; tx3 = 20; ty3 = -20; } // Slam ground
+        else if (vAct === 'punchCombo') { const af = p.actionFrame; if (af < 12) { tx2 = 20; ty2 = -120; tx3 = 60; ty3 = -120; } else if (af < 25) { tx2 = -20; ty2 = -150; tx3 = -30; ty3 = -180; } else if (af < 45) { tx2 = 0; ty2 = -160; tx3 = 20; ty3 = -200; } }
+        else if (vAct === 'uppercut' && p.actionFrame >= 10) { tx2 = 0; ty2 = -160; tx3 = 20; ty3 = -200; }
+        else if (vAct === 'slam') { if (p.actionFrame < 10) { tx2 = 40; ty2 = -100; tx3 = 60; ty3 = -100; } else if (p.actionFrame < 30) { tx2 = 20; ty2 = -150; tx3 = 30; ty3 = -200; } else { tx2 = -40; ty2 = -120; tx3 = -60; ty3 = -100; } }
+        
+        this.ctx.beginPath(); this.ctx.moveTo(tx1, ty1); this.ctx.lineTo(tx2, ty2); this.ctx.lineTo(tx3, ty3); this.ctx.stroke();
+        
+        // Draw Trident (Trishul)
+        const trAngle = Math.atan2(ty3 - ty2, tx3 - tx2);
+        this.ctx.save(); this.ctx.translate(tx3, ty3); this.ctx.rotate(trAngle);
+        this.ctx.strokeStyle = '#94a3b8'; this.ctx.lineWidth = 4;
+        this.ctx.beginPath(); this.ctx.moveTo(-60, 0); this.ctx.lineTo(20, 0); this.ctx.stroke(); 
+        this.ctx.beginPath(); this.ctx.moveTo(20, -15); this.ctx.quadraticCurveTo(40, 0, 20, 15); this.ctx.stroke(); 
+        this.ctx.beginPath(); this.ctx.moveTo(20, 0); this.ctx.lineTo(40, 0); this.ctx.stroke(); 
+        this.ctx.restore();
+
+        // Right Extra Arm (Skull Cup)
+        let sx1 = 20, sy1 = -120, sx2 = 40, sy2 = -150, sx3 = 30, sy3 = -180;
+        if (vAct === 'special1') { sx2 = 50; sy2 = -130; sx3 = 60; sy3 = -110; } 
+        else if (vAct === 'slam') { if (p.actionFrame < 10) { sx2 = 60; sy2 = -100; sx3 = 80; sy3 = -100; } else if (p.actionFrame < 30) { sx2 = 30; sy2 = -160; sx3 = 40; sy3 = -210; } else { sx2 = -30; sy2 = -100; sx3 = -50; sy3 = -80; } }
+        
+        this.ctx.strokeStyle = stats.color; this.ctx.lineWidth = 12;
+        this.ctx.beginPath(); this.ctx.moveTo(sx1, sy1); this.ctx.lineTo(sx2, sy2); this.ctx.lineTo(sx3, sy3); this.ctx.stroke();
+        this.ctx.fillStyle = '#e2e8f0'; this.ctx.beginPath(); this.ctx.arc(sx3, sy3, 10, 0, Math.PI, false); this.ctx.fill(); 
+    }
+
+    // --- CHARACTER SPECIFIC BODY RENDERING ---
+    if (p.charId === 'serpent') {
+        this.ctx.strokeStyle = stats.color; this.ctx.lineWidth = 25;
+        this.ctx.beginPath(); this.ctx.moveTo(0, -60); this.ctx.quadraticCurveTo(-40, -30, -10 + Math.sin(t)*20, 0); this.ctx.quadraticCurveTo(40, 10, -30 + Math.cos(t)*10, 0); this.ctx.stroke();
+        this.ctx.strokeStyle = stats.secondaryColor; this.ctx.lineWidth = 10; this.ctx.stroke();
+    } else if (p.charId === 'kumari') {
+        this.ctx.fillStyle = stats.color;
+        this.ctx.beginPath(); this.ctx.moveTo(-15, -60); this.ctx.lineTo(15, -60); this.ctx.quadraticCurveTo(30 + Math.sin(t)*10, -20, 40, 0); this.ctx.lineTo(-40, 0); this.ctx.quadraticCurveTo(-30 + Math.sin(t)*10, -20, -15, -60); this.ctx.fill();
+        this.ctx.fillStyle = stats.secondaryColor; this.ctx.fillRect(-20, -10, 40, 5); 
+    } else {
+        this.ctx.strokeStyle = p.charId === 'ned_kelly' ? '#333' : '#111'; this.ctx.lineWidth = p.charId === 'ned_kelly' ? 22 : 16;
+        this.ctx.beginPath(); this.ctx.moveTo(lx1, ly1); this.ctx.lineTo(lx2, ly2); this.ctx.lineTo(lx3, ly3); this.ctx.stroke();
+        this.ctx.beginPath(); this.ctx.moveTo(rx1, ry1); this.ctx.lineTo(rx2, ry2); this.ctx.lineTo(rx3, ry3); this.ctx.stroke();
+        this.ctx.strokeStyle = stats.color; this.ctx.lineWidth = p.charId === 'ned_kelly' ? 16 : 10; 
+        this.ctx.beginPath(); this.ctx.moveTo(lx2, ly2); this.ctx.lineTo(lx3, ly3); this.ctx.stroke();
+        this.ctx.beginPath(); this.ctx.moveTo(rx2, ry2); this.ctx.lineTo(rx3, ry3); this.ctx.stroke();
+    }
+
+    // DRAW TORSO
+    if (p.charId === 'ned_kelly') {
+        this.ctx.fillStyle = stats.color; this.ctx.fillRect(-30, -135, 60, 75);
+        this.ctx.fillStyle = '#222'; this.ctx.fillRect(-25, -110, 50, 10);
+    } else if (p.charId === 'bhairav') {
+        this.ctx.fillStyle = '#1e293b'; 
+        this.ctx.beginPath(); this.ctx.moveTo(-22, -135); this.ctx.lineTo(22, -135); this.ctx.lineTo(16, -60); this.ctx.lineTo(-16, -60); this.ctx.fill();
+        this.ctx.fillStyle = '#eab308'; this.ctx.fillRect(-18, -75, 36, 25);
+        this.ctx.strokeStyle = '#000'; this.ctx.lineWidth = 2;
+        this.ctx.beginPath(); this.ctx.moveTo(-18,-70); this.ctx.lineTo(-5,-65); this.ctx.stroke();
+        this.ctx.beginPath(); this.ctx.moveTo(18,-60); this.ctx.lineTo(5,-65); this.ctx.stroke();
+        this.ctx.beginPath(); this.ctx.moveTo(-18,-55); this.ctx.lineTo(-10,-55); this.ctx.stroke();
+        this.ctx.fillStyle = '#e2e8f0';
+        this.ctx.beginPath(); this.ctx.arc(0, -100, 5, 0, Math.PI*2); this.ctx.fill();
+        this.ctx.beginPath(); this.ctx.arc(-12, -110, 4, 0, Math.PI*2); this.ctx.fill();
+        this.ctx.beginPath(); this.ctx.arc(12, -110, 4, 0, Math.PI*2); this.ctx.fill();
+    } else {
+        this.ctx.fillStyle = stats.color;
+        this.ctx.beginPath(); this.ctx.moveTo(-22, -135); this.ctx.lineTo(22, -135); this.ctx.lineTo(16, -60); this.ctx.lineTo(-16, -60); this.ctx.fill();
+        this.ctx.fillStyle = stats.secondaryColor; this.ctx.beginPath(); this.ctx.moveTo(-10, -135); this.ctx.lineTo(10, -135); this.ctx.lineTo(0, -90); this.ctx.fill();
+    }
+
+    this.ctx.strokeStyle = 'rgba(255,255,255,0.15)'; this.ctx.lineWidth = 3; this.ctx.stroke();
+
+    // DRAW HEAD SVG
+    this.ctx.shadowColor = (vAct === 'special1' || vAct === 'special2') ? '#ffffff' : stats.secondaryColor; 
+    this.ctx.shadowBlur = (vAct === 'attack' || vAct === 'kick' || vAct === 'special1' || vAct === 'special2') ? 25 : 5;
+    if (['special3', 'punchCombo', 'kickCombo', 'uppercut', 'slam'].includes(p.action)) this.ctx.shadowBlur = 30; 
+    this.ctx.drawImage(img, -45, -215, 90, 90); this.ctx.shadowBlur = 0;
+
+    // DRAW FRONT ARM
+    this.ctx.strokeStyle = stats.color; this.ctx.lineWidth = p.charId === 'ned_kelly' ? 18 : 14;
+    this.ctx.beginPath(); this.ctx.moveTo(fsX, fsY); this.ctx.lineTo(feX, feY); this.ctx.lineTo(fhX, fhY); this.ctx.stroke();
+    
+    if (p.charId === 'ned_kelly') {
+        this.ctx.fillStyle = '#111'; this.ctx.fillRect(fhX - 5, fhY - 10, 30, 8);
+    } else {
+        this.ctx.fillStyle = stats.secondaryColor; this.ctx.beginPath(); this.ctx.arc(fhX, fhY, 14, 0, Math.PI*2); this.ctx.fill(); 
+    }
+    this.ctx.restore();
+
+    if (p.charId === 'kumari' && p.action === 'special2' && p.actionFrame > 15 && p.actionFrame < 45) {
+        this.ctx.shadowColor = '#ffffff'; this.ctx.shadowBlur = 30; this.ctx.fillStyle = stats.secondaryColor;
+        this.ctx.fillRect(40, -160, 1000, 40); 
+        this.ctx.fillStyle = '#ffffff'; this.ctx.fillRect(40, -150, 1000, 20);
+        this.ctx.shadowBlur = 0;
+    }
+
+    this.ctx.restore();
+    this.ctx.save(); this.ctx.translate(p.x, p.y); this.ctx.fillStyle = 'rgba(0,0,0,0.5)'; this.ctx.fillRect(-40, -245, 80, 20); this.ctx.fillStyle = 'white'; this.ctx.font = 'bold 12px sans-serif'; this.ctx.textAlign = 'center'; this.ctx.fillText(stats.name.toUpperCase(), 0, -231); this.ctx.restore();
+  }
+
+  drawProjectiles = () => {
+      this.ctx.save(); for(let p of this.projectiles) { 
+          if (!p.active) continue; const stats = CHARACTERS[p.charId]; 
+          
+          if (p.type === 'fireball') { 
+              this.ctx.shadowColor = p.charId === 'bhairav' ? '#ea580c' : stats.color; this.ctx.shadowBlur = 30; this.ctx.fillStyle = p.charId === 'bhairav' ? '#facc15' : stats.secondaryColor;
+              this.ctx.beginPath(); this.ctx.ellipse(p.x, p.y, p.width/2, p.height/2, 0, 0, Math.PI*2); this.ctx.fill();
+              this.ctx.fillStyle = 'rgba(255,255,255,0.8)'; this.ctx.beginPath(); this.ctx.ellipse(p.x, p.y, p.width/4, p.height/4, 0, 0, Math.PI*2); this.ctx.fill();
+          } else if (p.type === 'darkSkull') {
+              this.ctx.shadowColor = '#4c1d95'; this.ctx.shadowBlur = 30; this.ctx.fillStyle = '#3b0764';
+              this.ctx.beginPath(); this.ctx.ellipse(p.x, p.y, p.width/2, p.height/2, 0, 0, Math.PI*2); this.ctx.fill();
+              this.ctx.fillStyle = '#ef4444'; this.ctx.beginPath(); this.ctx.arc(p.x + (p.vx > 0 ? 10 : -10), p.y - 5, 5, 0, Math.PI*2); this.ctx.fill();
+              this.ctx.fillStyle = 'rgba(124, 58, 237, 0.6)'; this.ctx.beginPath(); this.ctx.moveTo(p.x, p.y - 15); this.ctx.lineTo(p.x - p.vx*3, p.y); this.ctx.lineTo(p.x, p.y + 15); this.ctx.fill();
+          } else if (p.type === 'darkSpike') {
+              this.ctx.shadowColor = '#4c1d95'; this.ctx.shadowBlur = 20; this.ctx.fillStyle = '#1e1b4b'; this.ctx.strokeStyle = '#7c3aed'; this.ctx.lineWidth = 3;
+              this.ctx.beginPath(); this.ctx.moveTo(p.x - p.width/2, p.y); this.ctx.lineTo(p.x - p.width/4, p.y - p.height * 0.5); this.ctx.lineTo(p.x, p.y - p.height); this.ctx.lineTo(p.x + p.width/4, p.y - p.height * 0.7); this.ctx.lineTo(p.x + p.width/2, p.y); this.ctx.fill(); this.ctx.stroke();
+          } else if (p.type === 'lightning') { 
+              this.ctx.shadowColor = '#ffffff'; this.ctx.shadowBlur = 30; this.ctx.strokeStyle = stats.secondaryColor; this.ctx.lineWidth = 15;
+              this.ctx.beginPath(); this.ctx.moveTo(p.x, 0); for(let y=0; y < p.y; y+=40) this.ctx.lineTo(p.x + (Math.random()-0.5)*50, y); this.ctx.lineTo(p.x, p.y); this.ctx.stroke(); 
+          } else if (p.type === 'bullet') { 
+              this.ctx.fillStyle = '#ffffff'; this.ctx.shadowColor = '#ffff00'; this.ctx.shadowBlur = 10; this.ctx.fillRect(p.x - p.width/2, p.y - p.height/2, p.width, p.height); 
+          } else if (p.type === 'venom') { 
+              this.ctx.fillStyle = '#00ff00'; this.ctx.shadowColor = '#00aa00'; this.ctx.shadowBlur = 20; this.ctx.beginPath(); this.ctx.ellipse(p.x, p.y, p.width, p.height/2, Math.atan2(p.vy, p.vx), 0, Math.PI*2); this.ctx.fill(); 
+          } else if (p.type === 'wave') { 
+              this.ctx.fillStyle = 'rgba(0, 200, 255, 0.7)'; this.ctx.shadowColor = '#00ffff'; this.ctx.shadowBlur = 40; this.ctx.beginPath(); this.ctx.moveTo(p.x + (p.vx > 0 ? -p.width : p.width), p.y + p.height/2); this.ctx.quadraticCurveTo(p.x, p.y - p.height, p.x + (p.vx > 0 ? p.width : -p.width), p.y + p.height/2); this.ctx.fill(); 
+          } 
+      } 
+      this.ctx.restore();
+  }
+
+  drawParticles = () => { for (let i = this.particles.length - 1; i >= 0; i--) { const p = this.particles[i]; this.ctx.fillStyle = p.color; this.ctx.globalAlpha = Math.max(0, p.life); this.ctx.beginPath(); this.ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); this.ctx.fill(); p.x += p.vx; p.y += p.vy; p.life -= 0.04; if (p.life <= 0) this.particles.splice(i, 1); } this.ctx.globalAlpha = 1.0; }
+
+  drawPremiumHUD = () => {
+    const barWidth = 400, barHeight = 28, yPos = 55; 
+    const p1HpPercent = Math.max(0, this.p1.hp / this.p1.maxHp); const p1DispPercent = Math.max(0, this.p1.displayHp / this.p1.maxHp);
+    this.ctx.fillStyle = 'rgba(0,0,0,0.7)'; this.ctx.fillRect(45, yPos - 5, barWidth + 10, barHeight + 10);
+    this.ctx.strokeStyle = CHARACTERS[this.p1.charId].color; this.ctx.lineWidth = 3; this.ctx.strokeRect(48, yPos - 2, barWidth + 4, barHeight + 4);
+    this.ctx.fillStyle = '#ffcc00'; this.ctx.fillRect(50 + barWidth * (1 - p1DispPercent), yPos, barWidth * p1DispPercent, barHeight);
+    this.ctx.fillStyle = p1HpPercent < 0.2 ? '#ff0000' : '#00ff44'; this.ctx.fillRect(50 + barWidth * (1 - p1HpPercent), yPos, barWidth * p1HpPercent, barHeight);
+    
+    const p2HpPercent = Math.max(0, this.p2.hp / this.p2.maxHp); const p2DispPercent = Math.max(0, this.p2.displayHp / this.p2.maxHp);
+    this.ctx.fillStyle = 'rgba(0,0,0,0.7)'; this.ctx.fillRect(545, yPos - 5, barWidth + 10, barHeight + 10);
+    this.ctx.strokeStyle = CHARACTERS[this.p2.charId].color; this.ctx.strokeRect(548, yPos - 2, barWidth + 4, barHeight + 4);
+    this.ctx.fillStyle = '#ffcc00'; this.ctx.fillRect(550, yPos, barWidth * p2DispPercent, barHeight);
+    this.ctx.fillStyle = p2HpPercent < 0.2 ? '#ff0000' : '#00ff44'; this.ctx.fillRect(550, yPos, barWidth * p2HpPercent, barHeight);
+    
+    const timeSecs = Math.max(0, Math.ceil(this.timeLeft / FPS));
+    this.ctx.fillStyle = timeSecs <= 10 ? '#ff0000' : '#ffffff'; this.ctx.font = '900 48px Impact'; this.ctx.textAlign = 'center'; this.ctx.shadowColor = timeSecs <= 10 ? 'red' : 'rgba(0,0,0,0.8)'; this.ctx.shadowBlur = 10; this.ctx.fillText(timeSecs.toString(), CANVAS_WIDTH/2, 85); this.ctx.shadowBlur = 0;
+    
+    if (this.isPaused) {
+       this.ctx.fillStyle = 'rgba(0,0,0,0.6)'; this.ctx.fillRect(0,0, CANVAS_WIDTH, CANVAS_HEIGHT);
+       this.ctx.fillStyle = 'white'; this.ctx.font = 'italic 900 80px Impact'; this.ctx.textAlign = 'center';
+       this.ctx.shadowColor = '#00ffff'; this.ctx.shadowBlur = 20; 
+       this.ctx.fillText('PAUSED', CANVAS_WIDTH/2, CANVAS_HEIGHT/2);
+       this.ctx.shadowBlur = 0; 
+    } else if (this.isGameOver) { 
+       this.ctx.fillStyle = 'rgba(0,0,0,0.6)'; this.ctx.fillRect(0,0, CANVAS_WIDTH, CANVAS_HEIGHT); 
+       this.ctx.fillStyle = 'red'; this.ctx.font = 'italic 900 120px Impact'; this.ctx.textAlign = 'center'; this.ctx.shadowColor = 'red'; this.ctx.shadowBlur = 30; 
+       this.ctx.fillText(this.timeOver ? 'TIME OVER' : 'K.O.', CANVAS_WIDTH/2, CANVAS_HEIGHT/2 - 40); 
+       this.ctx.fillStyle = 'white'; this.ctx.font = 'bold 50px sans-serif'; this.ctx.shadowColor = 'white'; this.ctx.shadowBlur = 10; 
+       this.ctx.fillText(this.winnerName === 'NOBODY' ? 'DRAW!' : `${this.winnerName?.toUpperCase()} WINS!`, CANVAS_WIDTH/2, CANVAS_HEIGHT/2 + 50); this.ctx.shadowBlur = 0; 
+    }
+  }
+
+  loop = () => {
+    if (!this.isPaused) { this.updatePhysics(); if (this.shakeFrames > 0) this.shakeFrames--; }
+    this.ctx.save();
+    if (this.shakeFrames > 0 && !this.isPaused) { const intensity = this.hitstopFrames > 0 ? 15 : 8; this.ctx.translate((Math.random() - 0.5) * intensity, (Math.random() - 0.5) * intensity); }
+    
+    this.drawBackground();
+    
+    if (this.superFlash > 0 && !this.isPaused) { this.ctx.fillStyle = 'rgba(255,255,255,0.8)'; this.ctx.fillRect(0,0, CANVAS_WIDTH, CANVAS_HEIGHT); this.superFlash--; }
+    
+    this.drawCharacter(this.p1); this.drawCharacter(this.p2); this.drawProjectiles(); this.drawParticles();
+    
+    this.ctx.restore(); this.drawPremiumHUD(); this.animationFrameId = requestAnimationFrame(this.loop);
+  }
+  start = () => { this.loop(); }
+}
+
+// ==========================================
+// SHARED UI COMPONENTS
+// ==========================================
+const ControlsLegend = ({ className = "" }: { className?: string }) => (
+  <div className={`grid grid-cols-2 md:grid-cols-7 gap-4 p-4 bg-zinc-950/80 rounded-xl border border-zinc-700 backdrop-blur-md shadow-2xl ${className}`}>
+    <div className="flex flex-col">
+      <span className="text-[10px] text-zinc-500 uppercase font-black tracking-tighter">Movement</span>
+      <span className="text-xs font-bold"><span className="text-yellow-400">[WAD]</span> • <span className="text-yellow-400">[S]</span> Duck</span>
+    </div>
+    <div className="flex flex-col">
+      <span className="text-[10px] text-zinc-500 uppercase font-black tracking-tighter">Action</span>
+      <span className="text-xs font-bold text-white"><span className="text-red-400">[J]</span> Punch • <span className="text-blue-400">[K]</span> Kick</span>
+    </div>
+    <div className="flex flex-col">
+      <span className="text-[10px] text-zinc-500 uppercase font-black tracking-tighter">Defense</span>
+      <span className="text-xs font-bold text-cyan-400 tracking-tighter">[SPACEBAR] Block</span>
+    </div>
+    <div className="flex flex-col">
+      <span className="text-[10px] text-zinc-500 uppercase font-black tracking-tighter">Throw/Grab</span>
+      <span className="text-xs font-bold text-green-400 tracking-tighter"><span className="text-green-400">[L]</span> Unblockable</span>
+    </div>
+    <div className="flex flex-col">
+      <span className="text-[10px] text-zinc-500 uppercase font-black tracking-tighter">Uppercut</span>
+      <span className="text-xs font-bold text-orange-400 tracking-tighter"><span className="text-yellow-400">S</span> + <span className="text-red-400">J</span></span>
+    </div>
+    <div className="flex flex-col">
+      <span className="text-[10px] text-zinc-500 uppercase font-black tracking-tighter">Auto Combos</span>
+      <span className="text-xs font-bold text-zinc-300 tracking-tighter">Tap <span className="text-white bg-red-900/50 px-1 rounded">J</span>x3 or <span className="text-white bg-blue-900/50 px-1 rounded">K</span>x3</span>
+    </div>
+    <div className="flex flex-col">
+      <span className="text-[10px] text-zinc-500 uppercase font-black tracking-tighter">Ultimate</span>
+      <span className="text-xs font-bold text-purple-400 tracking-tighter">L+R ➔ <span className="text-white bg-purple-600 px-1 rounded">[J+K]</span></span>
+    </div>
+  </div>
+);
+
+// ==========================================
+// MAIN REACT COMPONENT
+// ==========================================
+export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [matchId, setMatchId] = useState<string | null>(null);
+  const [lobbyCode, setLobbyCode] = useState('');
+  const [view, setView] = useState<'menu' | 'select' | 'lobby' | 'game' | 'result'>('menu');
+  const [gameMode, setGameMode] = useState<'single' | 'multi' | null>(null);
+  const [aiDifficulty, setAiDifficulty] = useState<'easy'|'medium'|'hard'>('medium');
+  const [isHost, setIsHost] = useState(false);
+  const [myChar, setMyChar] = useState<CharId>('bhairav');
+  const [opponentChar, setOpponentChar] = useState<CharId | null>(null);
+  const [selectedStage, setSelectedStage] = useState<StageId>('inferno');
+  const [matchStage, setMatchStage] = useState<StageId>('inferno');
+  const [gameResult, setGameResult] = useState<'win' | 'loss' | 'tie' | null>(null);
+  const [isLandscape, setIsLandscape] = useState(true);
+
+  useEffect(() => {
+    const checkOrientation = () => setIsLandscape(window.innerWidth > window.innerHeight);
+    window.addEventListener('resize', checkOrientation); checkOrientation();
+    return () => window.removeEventListener('resize', checkOrientation);
+  }, []);
+
+  useEffect(() => {
+    if (!initFirebase()) { setLoading(false); return; }
+    const initAuth = async () => {
+      try {
+        if (typeof (window as any).__initial_auth_token !== 'undefined' && (window as any).__initial_auth_token) await signInWithCustomToken(auth, (window as any).__initial_auth_token);
+        else await signInAnonymously(auth);
+      } catch (err) { console.error("Auth Error", err); }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => { setUser(u); setLoading(false); });
+    return () => unsubscribe();
+  }, []);
+
+  const handleCreateLobby = async () => {
+    if (!user) return;
+    const newMatchId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    await setDoc(doc(getMatchCollection(), newMatchId), { hostId: user.uid, hostChar: myChar, guestId: null, guestChar: null, stage: selectedStage, status: 'waiting', createdAt: Date.now() });
+    setMatchId(newMatchId); setIsHost(true); setMatchStage(selectedStage); setView('lobby');
+  };
+
+  const handleJoinLobby = async () => {
+    if (!user || !lobbyCode) return;
+    const matchRef = doc(getMatchCollection(), lobbyCode.toUpperCase());
+    try {
+      await runTransaction(db, async (transaction: any) => {
+        const matchDoc = await transaction.get(matchRef);
+        if (!matchDoc.exists()) throw "Match does not exist!";
+        const data = matchDoc.data();
+        if (data.status !== 'waiting') throw "Match already started!";
+        transaction.update(matchRef, { guestId: user.uid, guestChar: myChar, status: 'playing' });
+        setMatchStage(data.stage || 'durbar');
+      });
+      setMatchId(lobbyCode.toUpperCase()); setIsHost(false); setView('game'); 
+    } catch (e: any) { alert(e.toString()); }
+  };
+
+  useEffect(() => {
+    if (!user || !matchId || view !== 'lobby') return;
+    const unsubscribe = onSnapshot(doc(getMatchCollection(), matchId), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.status === 'playing' && data.guestId) {
+          setOpponentChar(isHost ? data.guestChar : data.hostChar); 
+          if(data.stage) setMatchStage(data.stage);
+          setView('game');
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, [user, matchId, view, isHost]);
+
+  const handleBack = () => {
+    if (view === 'select') { setView('menu'); setGameMode(null); } 
+    else if (view === 'lobby') { setView('select'); setMatchId(null); } 
+    else if (view === 'result') { setView('menu'); setMatchId(null); setGameResult(null); }
+  };
+
+  const handleStartSinglePlayer = () => {
+    const chars = Object.keys(CHARACTERS) as CharId[];
+    const randomOpponent = chars[Math.floor(Math.random() * chars.length)];
+    setOpponentChar(randomOpponent); setIsHost(true); setMatchStage(selectedStage); setMatchId('SINGLE_PLAYER'); setView('game');
+  };
+
+  if (loading) return <div className="h-screen w-screen bg-black text-white flex items-center justify-center font-mono">INITIALIZING ARCADE SYSTEMS...</div>;
+  if (!user) return <div className="h-screen w-screen bg-black text-white flex items-center justify-center font-mono text-red-500"><AlertCircle className="mr-2"/> NETWORK CONNECTION FAILED</div>;
+
+  if (!isLandscape) {
+    return (
+      <div className="h-screen w-screen bg-zinc-900 text-white flex flex-col items-center justify-center p-8 text-center font-sans">
+        <motion.div animate={{ rotate: 90 }} transition={{ repeat: Infinity, duration: 2, repeatDelay: 1 }}><Shield size={64} className="text-yellow-400 mb-6" /></motion.div>
+        <h2 className="text-2xl font-bold mb-4 uppercase tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-yellow-500">Rotate Device</h2>
+        <p className="text-gray-400">Street Fighter: Legends must be played in landscape mode.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-screen w-screen bg-zinc-950 overflow-hidden font-sans select-none text-white relative">
+      <AnimatePresence mode="wait">
+        {view === 'menu' && (
+          <motion.div key="menu" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 flex flex-col items-center justify-center bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-zinc-800 to-black">
+            <motion.h1 initial={{ scale: 0.8, y: -50 }} animate={{ scale: 1, y: 0 }} transition={{ type: 'spring', bounce: 0.5 }} className="text-6xl md:text-8xl font-black mb-2 tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-red-600 via-yellow-500 to-orange-500 drop-shadow-[0_0_15px_rgba(255,0,0,0.5)]" style={{ fontFamily: "'Impact', sans-serif" }}>LEGENDS</motion.h1>
+            <p className="text-xl text-gray-400 tracking-[0.3em] mb-12 uppercase font-bold">Street Fighter Engine</p>
+            <div className="flex gap-6 z-10 flex-col md:flex-row">
+              <button onClick={() => { setGameMode('single'); setView('select'); }} className="group relative px-8 py-4 bg-yellow-600 hover:bg-yellow-500 text-white font-bold text-xl uppercase tracking-wider transform skew-x-[-10deg] transition-all overflow-hidden border-2 border-yellow-400 shadow-[0_0_20px_rgba(202,138,4,0.5)]"><span className="inline-block transform skew-x-[10deg]">Single Player</span></button>
+              <button onClick={() => { setGameMode('multi'); setView('select'); }} className="group relative px-8 py-4 bg-red-600 hover:bg-red-500 text-white font-bold text-xl uppercase tracking-wider transform skew-x-[-10deg] transition-all overflow-hidden border-2 border-red-400 shadow-[0_0_20px_rgba(220,38,38,0.5)]"><span className="inline-block transform skew-x-[10deg]">Multiplayer</span></button>
+            </div>
+          </motion.div>
+        )}
+
+        {view === 'select' && (
+          <motion.div key="select" initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} className="absolute inset-0 bg-zinc-900 p-6 flex flex-col overflow-y-auto">
+            <button onClick={handleBack} className="absolute top-6 left-6 z-50 flex items-center text-zinc-400 hover:text-white transition-colors uppercase font-bold tracking-widest text-sm bg-black/50 px-4 py-2 rounded-full border border-zinc-700">
+                <ArrowLeft size={16} className="mr-2" /> Back
+            </button>
+
+            <div className="flex justify-center items-center mb-2 mt-8 md:mt-0">
+               <h2 className="text-3xl font-black uppercase tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-yellow-500 drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)]">Select Your Legend</h2>
+            </div>
+
+            <div className="flex-1 flex gap-6 items-center justify-center overflow-x-auto pb-2">
+              {Object.values(CHARACTERS).map((char) => (
+                <motion.div key={char.id} whileHover={{ scale: 1.02, y: -5 }} onClick={() => setMyChar(char.id as CharId)} className={`relative min-w-[200px] h-[260px] rounded-xl border-4 cursor-pointer overflow-hidden transition-all group ${myChar === char.id ? 'border-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.6)] z-10' : 'border-zinc-800 hover:border-zinc-700'}`} style={{ background: `linear-gradient(to bottom, ${char.secondaryColor}22, ${char.color}66)` }}>
+                  <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]"></div>
+                  <div className="absolute inset-0 flex items-center justify-center pt-4 pointer-events-none"><img src={char.svg} alt={char.name} className={`w-[140px] h-[140px] object-contain transition-transform duration-500 ${myChar === char.id ? 'scale-110 drop-shadow-[0_0_20px_rgba(255,255,255,0.4)]' : 'group-hover:scale-105 opacity-80'}`} /></div>
+                  <div className="absolute bottom-0 w-full p-3 bg-gradient-to-t from-black via-black/90 to-transparent">
+                    <div className="text-[10px] font-bold tracking-widest uppercase mb-1" style={{ color: char.color }}>{char.origin}</div>
+                    <div className="text-xl font-black uppercase mb-1 leading-none drop-shadow-md">{char.name}</div>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+
+            {/* STAGE SELECTOR UI */}
+            <div className="flex flex-col items-center mb-4">
+              <h3 className="text-xs font-black uppercase tracking-widest text-zinc-400 mb-2">Select Stage</h3>
+              <div className="flex gap-4 overflow-x-auto pb-2 px-4 max-w-full">
+                {Object.values(STAGES).map((stage) => (
+                   <button key={stage.id} onClick={() => setSelectedStage(stage.id as StageId)} className={`relative overflow-hidden group w-32 h-16 rounded-md border-2 transition-all flex flex-col justify-end p-2 text-left ${selectedStage === stage.id ? 'border-white shadow-[0_0_15px_rgba(255,255,255,0.4)]' : 'border-zinc-700 opacity-50 hover:opacity-100'}`} style={{ background: `linear-gradient(to bottom, ${stage.color2}, ${stage.color1})` }}>
+                      <div className="relative z-10">
+                        <div className="text-[10px] font-black uppercase text-white leading-tight">{stage.name}</div>
+                        <div className="text-[8px] text-zinc-300 uppercase tracking-widest flex items-center"><MapPin size={8} className="mr-1"/> {stage.location.split(',')[0]}</div>
+                      </div>
+                   </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-2 flex flex-col md:flex-row gap-4 items-center justify-between bg-black/60 p-4 rounded-xl border border-zinc-800 backdrop-blur-sm">
+                {gameMode === 'single' ? (
+                  <div className="flex flex-col items-center flex-1">
+                    <div className="flex gap-2 mb-3">
+                       {['easy', 'medium', 'hard'].map(level => (
+                           <button key={level} onClick={() => setAiDifficulty(level as any)} className={`px-6 py-2 text-xs font-bold uppercase border-2 transition-all rounded ${aiDifficulty === level ? 'border-yellow-400 text-yellow-400 bg-yellow-400/10' : 'border-zinc-700 text-zinc-500'}`}>{level}</button>
+                       ))}
+                    </div>
+                    <button onClick={handleStartSinglePlayer} className="px-12 py-3 bg-yellow-600 hover:bg-yellow-500 text-black font-black text-xl uppercase tracking-widest shadow-[0_0_20px_rgba(202,138,4,0.4)] transform skew-x-[-10deg]">FIGHT AI</button>
+                  </div>
+                ) : (
+                  <div className="flex flex-1 justify-between items-center w-full">
+                    <div className="flex gap-2">
+                      <input value={lobbyCode} onChange={e => setLobbyCode(e.target.value)} placeholder="CODE" className="bg-zinc-900 border-2 border-zinc-700 px-4 py-2 text-white uppercase font-mono w-32 focus:outline-none focus:border-red-500" />
+                      <button onClick={handleJoinLobby} className="bg-zinc-800 hover:bg-zinc-700 px-6 font-bold uppercase border border-zinc-600">Join</button>
+                    </div>
+                    <div className="text-2xl font-black text-zinc-700 italic px-4">VS</div>
+                    <button onClick={handleCreateLobby} className="px-8 py-3 bg-red-600 hover:bg-red-500 font-black text-lg uppercase tracking-widest shadow-[0_0_20px_rgba(220,38,38,0.4)]">Create Match</button>
+                  </div>
+                )}
+            </div>
+
+            {/* Unified Controls Legend at the bottom */}
+            <ControlsLegend className="w-full mt-4 max-w-5xl mx-auto" />
+          </motion.div>
+        )}
+
+        {view === 'lobby' && (
+          <motion.div key="lobby" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 bg-zinc-900 flex flex-col items-center justify-center">
+            <button onClick={handleBack} className="absolute top-6 left-6 z-50 flex items-center text-zinc-400 hover:text-white transition-colors uppercase font-bold tracking-widest text-sm bg-black/50 px-4 py-2 rounded-full border border-zinc-700">
+                <ArrowLeft size={16} className="mr-2" /> Back
+            </button>
+            <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 4, ease: "linear" }} className="mb-8"><Wifi size={64} className="text-red-500 drop-shadow-[0_0_15px_rgba(220,38,38,0.8)]" /></motion.div>
+            <h2 className="text-4xl font-black uppercase mb-4 tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-500">Waiting for Challenger</h2>
+            <p className="text-xl text-gray-400 mb-8">Share this code with your opponent:</p>
+            <div className="bg-black border-4 border-zinc-700 rounded-xl flex items-center p-6 gap-6 mb-12 shadow-[0_0_50px_rgba(0,0,0,0.5)]">
+              <span className="text-7xl font-mono font-black tracking-widest text-yellow-400">{matchId}</span>
+              <button onClick={() => { navigator.clipboard.writeText(matchId || ''); alert("Copied to clipboard!"); }} className="bg-zinc-800 p-5 rounded-lg hover:bg-zinc-700 transition-colors border border-zinc-600"><Copy size={32} /></button>
+            </div>
+            <div className="flex gap-16 opacity-80 items-center">
+               <div className="text-center">
+                 <img src={CHARACTERS[myChar].svg} className="w-32 h-32 bg-zinc-900 rounded-full mb-4 mx-auto border-4 border-red-500 object-contain p-2 shadow-[0_0_20px_rgba(220,38,38,0.5)]" alt="You" />
+                 <div className="font-bold tracking-widest uppercase">{CHARACTERS[myChar].name}</div>
+               </div>
+               <div className="text-6xl font-black text-zinc-800 italic">VS</div>
+               <div className="text-center animate-pulse">
+                 <div className="w-32 h-32 bg-zinc-900 rounded-full mb-4 mx-auto border-4 border-zinc-600 border-dashed flex items-center justify-center"><Users size={40} className="text-zinc-700" /></div>
+                 <div className="font-bold text-zinc-500 tracking-widest">SEARCHING...</div>
+               </div>
+            </div>
+            <div className="absolute bottom-6 font-bold tracking-widest uppercase text-zinc-500 flex items-center gap-2"><MapPin size={16}/> STAGE: <span className="text-white">{STAGES[matchStage].name}</span></div>
+          </motion.div>
+        )}
+
+        {view === 'game' && matchId && (
+          <GameScreen matchId={matchId} isHost={isHost} myChar={myChar} opponentChar={opponentChar || 'ned_kelly'} stageId={matchStage} userId={user.uid} onGameOver={(res) => { setView('select'); setMatchId(null); }} gameMode={gameMode} aiDifficulty={aiDifficulty} />
+        )}
+
+        {view === 'result' && (
+          <motion.div key="result" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="absolute inset-0 bg-black/95 flex flex-col items-center justify-center z-50">
+            <h1 className={`text-9xl font-black uppercase tracking-tighter mb-8 drop-shadow-[0_0_30px_currentColor] ${gameResult === 'win' ? 'text-yellow-400' : (gameResult === 'tie' ? 'text-gray-400' : 'text-red-600')}`}>{gameResult === 'win' ? 'YOU WIN' : (gameResult === 'tie' ? 'DRAW GAME' : 'DEFEATED')}</h1>
+            <button onClick={() => { setView('menu'); setMatchId(null); setGameResult(null); }} className="px-10 py-5 bg-zinc-800 hover:bg-zinc-700 text-white font-black text-2xl uppercase tracking-widest border-2 border-zinc-600">Return to Menu</button>
+          </motion.div>
+        )}
+
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ==========================================
+// GAME SCREEN COMPONENT
+// ==========================================
+interface GameScreenProps {
+  matchId: string; isHost: boolean; myChar: CharId; opponentChar: CharId; stageId: StageId;
+  userId: string; onGameOver: (result: 'win' | 'loss' | 'tie') => void; gameMode: 'single' | 'multi' | null; aiDifficulty: 'easy' | 'medium' | 'hard';
+}
+
+function GameScreen({ matchId, isHost, myChar, opponentChar, stageId, userId, onGameOver, gameMode, aiDifficulty }: GameScreenProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const gameRef = useRef<FighterGame | null>(null);
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    const canvas = canvasRef.current; canvas.width = CANVAS_WIDTH; canvas.height = CANVAS_HEIGHT;
+    const isSinglePlayer = gameMode === 'single';
+
+    const game = new FighterGame(
+      canvas, isHost ? myChar : opponentChar, isHost ? opponentChar : myChar, stageId,
+      isHost, isSinglePlayer, aiDifficulty,
+      (state) => { if (!isSinglePlayer) updateDoc(doc(getMatchCollection(), matchId), { [isHost ? 'p1State' : 'p2State']: state }).catch(()=>{}); },
+      (winnerId) => { 
+          let res: 'win' | 'loss' | 'tie' = 'loss';
+          if (winnerId === 'tie') res = 'tie';
+          else if ((isHost && winnerId === 'p1') || (!isHost && winnerId === 'p2')) res = 'win';
+          setTimeout(() => onGameOver(res), 4000); 
+      }
+    );
+    gameRef.current = game; game.start();
+
+    let unsubscribe = () => {};
+    if (!isSinglePlayer) {
+      unsubscribe = onSnapshot(doc(getMatchCollection(), matchId), (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const remoteState = isHost ? data.p2State : data.p1State;
+          if (remoteState && gameRef.current) gameRef.current.updateRemoteState(remoteState);
+        }
+      });
+    }
+    return () => { game.cleanup(); unsubscribe(); };
+  }, [matchId, isHost, myChar, opponentChar, stageId, onGameOver, gameMode, aiDifficulty]);
+
+  const handleTouch = (action: string, state: boolean) => { if (gameRef.current) gameRef.current.handleTouch(action, state); };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 bg-black flex flex-col justify-center items-center overflow-hidden">
+      
+      {/* GAME MENU OVERLAYS */}
+      <div className="absolute top-14 left-6 z-50 flex gap-3">
+        <button onClick={() => { if(window.confirm("Quit current match?")) onGameOver('loss'); }} className="flex items-center text-red-400 hover:text-white hover:bg-red-600 transition-colors uppercase font-bold tracking-widest text-xs bg-black/60 px-4 py-2 rounded-full border border-red-900/50 backdrop-blur-sm">
+            <ArrowLeft size={14} className="mr-2" /> Quit
+        </button>
+        <button onClick={() => gameRef.current?.togglePause()} className="flex items-center text-zinc-300 hover:text-white transition-colors uppercase font-bold tracking-widest text-xs bg-black/60 px-4 py-2 rounded-full border border-zinc-700 backdrop-blur-sm">
+            <Pause size={14} className="mr-2" /> Pause (P)
+        </button>
+      </div>
+
+      {/* COMPACT TOP INFO BAR */}
+      <div className="absolute top-0 left-0 right-0 h-10 bg-black/60 backdrop-blur-md border-b border-zinc-800 flex items-center justify-between px-6 z-20 hidden md:flex pointer-events-none">
+        <div className="flex items-center gap-4">
+           <div className="flex items-center gap-1 text-zinc-500 text-[10px] font-black uppercase"><Keyboard size={12} className="text-zinc-600"/> <span className="text-white">WASD</span> Move / Crouch</div>
+           <div className="flex items-center gap-1 text-zinc-500 text-[10px] font-black uppercase"><Shield size={12} className="text-zinc-600"/> <span className="text-white">SPACE</span> Block</div>
+           <div className="flex items-center gap-1 text-zinc-500 text-[10px] font-black uppercase"><Swords size={12} className="text-zinc-600"/> <span className="text-white">J/K</span> Strike</div>
+        </div>
+        <div className="flex items-center gap-6">
+           <div className="text-[10px] font-black uppercase text-zinc-500">Body Slam: <span className="text-green-400">L</span></div>
+           <div className="text-[10px] font-black uppercase text-zinc-500">Uppercut: <span className="text-red-400">S+J</span></div>
+           <div className="text-[10px] font-black uppercase text-zinc-500">Auto Combos: <span className="text-orange-400">J x3 / K x3 (Close)</span></div>
+           <div className="text-[10px] font-black uppercase text-zinc-500">Ultimate: <span className="text-purple-400">Back ➔ Forward ➔ J+K</span></div>
+        </div>
+      </div>
+
+      <div className="relative w-full h-full max-w-[1200px] max-h-[720px] aspect-video flex items-center justify-center bg-black pt-10">
+        <canvas ref={canvasRef} className="w-full h-full object-contain shadow-[0_0_80px_rgba(0,255,255,0.1)]" />
+        
+        {/* MOBILE TOUCH CONTROLS */}
+        <div className="absolute bottom-4 left-4 right-4 flex justify-between z-10 md:hidden opacity-40 hover:opacity-100 transition-opacity touch-none select-none">
+          <div className="grid grid-cols-3 gap-1 items-end w-32">
+            <div></div>
+            <button className="w-16 h-16 bg-zinc-800 rounded-full border-2 border-zinc-600 active:bg-yellow-500 flex items-center justify-center text-2xl font-bold touch-none select-none" onPointerDown={() => handleTouch('jump', true)} onPointerUp={() => handleTouch('jump', false)} onPointerLeave={() => handleTouch('jump', false)} onPointerCancel={() => handleTouch('jump', false)}>↑</button>
+            <div></div>
+            <button className="w-16 h-16 bg-zinc-800 rounded-full border-2 border-zinc-600 active:bg-red-500 flex items-center justify-center text-2xl font-bold touch-none select-none" onPointerDown={() => handleTouch('left', true)} onPointerUp={() => handleTouch('left', false)} onPointerLeave={() => handleTouch('left', false)} onPointerCancel={() => handleTouch('left', false)}>←</button>
+            <button className="w-16 h-16 bg-zinc-800 rounded-full border-2 border-zinc-600 active:bg-yellow-500 flex items-center justify-center text-2xl font-bold touch-none select-none" onPointerDown={() => handleTouch('crouch', true)} onPointerUp={() => handleTouch('crouch', false)} onPointerLeave={() => handleTouch('crouch', false)} onPointerCancel={() => handleTouch('crouch', false)}>↓</button>
+            <button className="w-16 h-16 bg-zinc-800 rounded-full border-2 border-zinc-600 active:bg-red-500 flex items-center justify-center text-2xl font-bold touch-none select-none" onPointerDown={() => handleTouch('right', true)} onPointerUp={() => handleTouch('right', false)} onPointerLeave={() => handleTouch('right', false)} onPointerCancel={() => handleTouch('right', false)}>→</button>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-2 items-end">
+            <button className="w-16 h-16 bg-zinc-800 rounded-full border-2 border-zinc-600 active:bg-cyan-500 flex items-center justify-center touch-none select-none" onPointerDown={() => handleTouch('block', true)} onPointerUp={() => handleTouch('block', false)} onPointerLeave={() => handleTouch('block', false)} onPointerCancel={() => handleTouch('block', false)}><Shield size={24}/></button>
+            <button className="w-16 h-16 bg-green-700 rounded-full border-2 border-green-900 active:bg-green-500 flex items-center justify-center text-white font-black text-xs tracking-tighter touch-none select-none" onPointerDown={() => handleTouch('slam', true)} onPointerUp={() => handleTouch('slam', false)} onPointerLeave={() => handleTouch('slam', false)} onPointerCancel={() => handleTouch('slam', false)}><Hand size={20}/><br/>GRAB</button>
+            <button className="w-16 h-16 bg-purple-600 rounded-full border-4 border-purple-800 active:bg-purple-400 active:scale-95 shadow-[0_0_30px_rgba(147,51,234,0.8)] flex items-center justify-center text-white touch-none select-none" onPointerDown={() => handleTouch('special3', true)} onPointerUp={() => handleTouch('special3', false)} onPointerLeave={() => handleTouch('special3', false)} onPointerCancel={() => handleTouch('special3', false)}><Swords size={24} className="animate-pulse" /></button>
+            <button className="w-20 h-20 bg-blue-600 rounded-full border-4 border-blue-800 active:bg-blue-400 active:scale-95 shadow-[0_0_30px_rgba(37,99,235,0.8)] flex items-center justify-center text-white touch-none select-none" onPointerDown={() => handleTouch('kick', true)} onPointerUp={() => handleTouch('kick', false)} onPointerLeave={() => handleTouch('kick', false)} onPointerCancel={() => handleTouch('kick', false)}><Zap size={32} /></button>
+            <button className="w-24 h-24 bg-red-600 rounded-full border-4 border-red-800 active:bg-red-400 active:scale-95 shadow-[0_0_30px_rgba(220,38,38,0.8)] flex items-center justify-center text-white touch-none select-none col-span-2 mx-auto" onPointerDown={() => handleTouch('attack', true)} onPointerUp={() => handleTouch('attack', false)} onPointerLeave={() => handleTouch('attack', false)} onPointerCancel={() => handleTouch('attack', false)}><Swords size={36} /></button>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
